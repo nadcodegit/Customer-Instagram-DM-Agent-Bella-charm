@@ -1,0 +1,7 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# Real bank details -- never commit, only the .example.json template.
+config/payment_secrets.json
