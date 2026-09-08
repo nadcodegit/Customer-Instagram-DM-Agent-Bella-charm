@@ -3,11 +3,19 @@
 A [LangGraph](https://langchain-ai.github.io/langgraph/) agent that reads
 incoming Instagram DMs for **Bella Charm London**
 ([@bellacharmlondon](https://www.instagram.com/bellacharmlondon/)), a
-handmade Italian charm bracelet stall in Camden, London, and drafts
-replies for the owner to review and send — it never sends anything
-itself. Built as a hands-on project to learn LangGraph (state, nodes,
-conditional edges, checkpointer/memory, structured tool-calling) against
-a real small business, not a toy example.
+handmade Italian charm bracelet stall in Camden, London. Most replies —
+price/browse/cart/checkout, store hours, the proof-of-payment answer, and
+even a genuinely out-of-scope message — send automatically, since the
+owner doesn't have time to review every DM and gating everything on her
+just recreates the delay this agent exists to remove. The one exception
+is the final purchase confirmation (the message carrying bank/PayPal
+details and the order total): that pauses via LangGraph's `interrupt()`
+for the owner to approve, edit, or reject before anything goes out,
+since it's the one reply where a wrong output has real financial
+consequences. Built as a hands-on project to learn LangGraph (state,
+nodes, conditional edges, checkpointer/memory, structured tool-calling,
+human-in-the-loop interrupts) against a real small business, not a toy
+example.
 
 ## What it handles
 
@@ -23,8 +31,11 @@ In short:
 - **Store hours / location** — fixed answer.
 - **"Can I send proof of payment here?"** — fixed answer.
 - **Everything else** (complaints, wholesale, custom orders, specific
-  charm designs we don't catalog, unrelated questions) — flagged for
-  the owner, not improvised.
+  charm designs we don't catalog, unrelated questions) — a fixed holding
+  reply ("the owner will get back to you personally") sends
+  automatically, and the raw message is logged to `owner_followups` for
+  her to follow up on in her own time. Not improvised, and not held up
+  waiting for her either.
 
 A customer can jump ahead in the flow (name a category *and* variant in
 one message, decline an item but name a different one instead, answer a
@@ -41,6 +52,13 @@ validly can, rather than forcing a rigid one-question-at-a-time script.
    (fresh message,      (mid-flow: match/     (order placed, don't know
     current_step        extract against the    if paid yet -- ask before
     == "start")          pending question)      anything else)
+                    \        |        /
+                  await_owner_approval
+              (auto-approves unless needs_human is
+               True -- only the final purchase
+               confirmation sets that; see below)
+                             |
+                            END
 ```
 
 - **State** (`state.py`) — a `TypedDict` carrying the conversation
@@ -65,7 +83,42 @@ validly can, rather than forcing a rigid one-question-at-a-time script.
   before assuming it's out of scope: an answerable digression (a
   different product, store hours, a greeting) gets answered inline and
   the original question is re-asked; a genuinely out-of-scope message
-  gets flagged for the owner instead.
+  gets its fixed holding reply and is logged to `owner_followups`
+  instead, same as a fresh "other" message.
+
+### Human review (`await_owner_approval`)
+
+Every reply passes through one more node before the run ends. For almost
+everything, `needs_human` is `False` and it sends immediately, no one in
+the loop. The one exception is `_t_final_confirm`'s "Yes" branch — the
+message carrying the bank/PayPal details and the order total — which sets
+`needs_human = True`. There, `await_owner_approval` calls LangGraph's
+`interrupt()`, which pauses the whole graph run and hands the draft (plus
+the customer's last message and context) to whoever is reviewing it.
+Execution — and the checkpointed state — sits frozen there until it's
+resumed with one of three decisions:
+
+- `{"action": "approve"}` — sends the draft as-is
+- `{"action": "edit", "text": "..."}` — sends the edited text instead
+- `{"action": "reject"}` — sends nothing
+
+`runner.py` splits this into two functions to match the two separate
+triggers now possible: `submit_customer_message()` runs the graph up to
+the pause (or straight through, if nothing needs review), and
+`resolve_pending_review()` resumes it once a decision comes in. This is
+also where real Instagram sending will eventually plug in: once
+`resolve_pending_review` returns `approved: True`, that's the point where
+a future webhook adapter would call the actual Instagram Send API instead
+of just returning the text.
+
+If another message arrives from the same customer while a review is
+still pending, `submit_customer_message` does **not** run an independent
+turn on it — that used to silently orphan the pending review, since
+there was nothing left to resume once a second, unrelated turn had
+already completed. Instead it appends the new message to the paused
+conversation via LangGraph's `update_state()` (no node executes), so the
+owner sees the *full* accumulated context — not just the first message —
+whenever she gets to it.
 
 ## Project structure
 
@@ -76,11 +129,14 @@ src/bella_charm_agent/
   step_config.py   per-step question text + valid-answer options
   payment.py       reads bank/PayPal details from a local secrets file
   graph.py         nodes, LLM schemas, conditional edges, build_graph()
-  runner.py        send_message() + an interactive terminal chat demo
+  runner.py        submit_customer_message() / resolve_pending_review()
+                   + an interactive terminal chat demo
 tests/
   test_transitions.py       pure FSM transition functions (no LLM)
   test_cart_helpers.py      cart_line / cart_total
   test_llm_nodes.py         LLM-calling nodes, with the LLM mocked
+  test_interrupt_flow.py    the review pause/resume, at the graph level
+  test_runner_queuing.py    a message arriving while a review is pending
   test_llm_quality_manual.py  opt-in: same tricky cases against the *real* model
   test_step_config.py       structural check (every step has a config entry)
 ```
@@ -106,8 +162,11 @@ current alternative.
 uv run python -m bella_charm_agent.runner
 ```
 
-Chats with one fixed `customer_id` in your terminal, printing each draft
-reply (nothing is ever sent anywhere).
+Chats with one fixed `customer_id` in your terminal, playing both the
+customer and the owner. Most replies print immediately as `[AUTO-SENT]`;
+the final purchase confirmation instead prompts you, as the owner, to
+approve/edit/reject before it's marked sent. Nothing is ever actually
+sent anywhere — it's all local.
 
 ## Test
 
@@ -131,3 +190,7 @@ in `graph.py` or after Groq changes the configured model.
   get no special handling.
 - No live Instagram integration yet — this runs against a simulated DM
   input (`runner.py`), not the real Meta/Instagram Messaging API.
+- The checkpointer is an in-memory `MemorySaver` — a pending review (or
+  any conversation state) doesn't survive a process restart. Fine for
+  local use; would need a durable checkpointer (e.g. Sqlite/Postgres)
+  before real deployment.
