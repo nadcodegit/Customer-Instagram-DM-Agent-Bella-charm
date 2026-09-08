@@ -18,17 +18,32 @@ Run this file directly for an interactive terminal chat that plays both
 parts (customer and owner) against one fixed customer_id.
 """
 
+import os
+import sqlite3
+from pathlib import Path
+
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 
 load_dotenv()
 
-from langgraph.types import Command  # noqa: E402  (import after load_dotenv on purpose)
+from langgraph.checkpoint.sqlite import SqliteSaver  # noqa: E402  (import after load_dotenv on purpose)
+from langgraph.types import Command  # noqa: E402
 
 from .graph import build_graph  # noqa: E402
 from .state import new_conversation_state  # noqa: E402
 
-_graph = build_graph()
+# A real (not in-memory) checkpointer -- without this, a server restart
+# would wipe every in-progress conversation and any review still waiting
+# on the owner. Configurable so a real deployment can point it at a
+# mounted volume; defaults to a gitignored file next to the project.
+_DB_PATH = os.environ.get(
+    "BELLA_AGENT_DB_PATH",
+    str(Path(__file__).resolve().parents[2] / "data" / "conversations.sqlite"),
+)
+Path(_DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+_conn = sqlite3.connect(_DB_PATH, check_same_thread=False)
+_graph = build_graph(checkpointer=SqliteSaver(_conn))
 
 
 def submit_customer_message(customer_id: str, text: str) -> dict:

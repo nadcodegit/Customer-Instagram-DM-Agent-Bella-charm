@@ -5,3 +5,6 @@ __pycache__/
 .pytest_cache/
 # Real bank details -- never commit, only the .example.json template.
 config/payment_secrets.json
+# Real customer conversation history (SqliteSaver checkpointer) -- never
+# commit, contains real names/addresses/order details.
+data/

@@ -137,6 +137,7 @@ tests/
   test_llm_nodes.py         LLM-calling nodes, with the LLM mocked
   test_interrupt_flow.py    the review pause/resume, at the graph level
   test_runner_queuing.py    a message arriving while a review is pending
+  test_sqlite_persistence.py  state survives a simulated process restart
   test_llm_quality_manual.py  opt-in: same tricky cases against the *real* model
   test_step_config.py       structural check (every step has a config entry)
 ```
@@ -156,6 +157,12 @@ Groq's model lineup changes over time — if `BELLA_AGENT_MODEL` 404s, check
 [console.groq.com/docs/models](https://console.groq.com/docs/models) for a
 current alternative.
 
+Conversation state (including any pending review) is persisted with a
+`SqliteSaver`, not an in-memory checkpointer — it survives a restart.
+The database file defaults to `data/conversations.sqlite` (gitignored,
+created automatically); override with `BELLA_AGENT_DB_PATH` to point it
+somewhere else (e.g. a mounted volume in a real deployment).
+
 ## Run
 
 ```bash
@@ -166,7 +173,9 @@ Chats with one fixed `customer_id` in your terminal, playing both the
 customer and the owner. Most replies print immediately as `[AUTO-SENT]`;
 the final purchase confirmation instead prompts you, as the owner, to
 approve/edit/reject before it's marked sent. Nothing is ever actually
-sent anywhere — it's all local.
+sent anywhere — it's all local. Because state is persisted (see Setup),
+you can quit (Ctrl+C) mid-conversation and pick it back up next run —
+including a still-pending review.
 
 ## Test
 
@@ -190,7 +199,6 @@ in `graph.py` or after Groq changes the configured model.
   get no special handling.
 - No live Instagram integration yet — this runs against a simulated DM
   input (`runner.py`), not the real Meta/Instagram Messaging API.
-- The checkpointer is an in-memory `MemorySaver` — a pending review (or
-  any conversation state) doesn't survive a process restart. Fine for
-  local use; would need a durable checkpointer (e.g. Sqlite/Postgres)
-  before real deployment.
+- No review UI yet — approving/editing/rejecting a pending review only
+  works from the terminal demo; the business owner can't use this
+  without one.

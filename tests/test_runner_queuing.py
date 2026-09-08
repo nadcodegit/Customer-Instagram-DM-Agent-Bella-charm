@@ -12,12 +12,22 @@ still pauses for review, so that's what's used here to get a thread into
 a pending state.
 """
 
+import pytest
 from langchain_core.messages import HumanMessage
 
 from bella_charm_agent import graph, runner
 from bella_charm_agent.state import new_conversation_state
 
 _CART = [{"category": "Charm", "variant": "Heart", "price": 5, "quantity": 1, "tag": None}]
+
+
+@pytest.fixture(autouse=True)
+def _isolated_graph(monkeypatch):
+    """runner._graph is backed by a real, persistent SQLite file (so
+    conversations survive a restart) -- tests must not write fake
+    customer_ids into it. Swap in a fresh, in-memory-backed graph for the
+    duration of each test instead."""
+    monkeypatch.setattr(runner, "_graph", graph.build_graph())
 
 
 def _seed_pending_final_confirm(customer_id: str, first_message: str) -> dict:
