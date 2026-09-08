@@ -255,6 +255,30 @@ manual testing (e.g. an indirect variant description, a customer naming a
 category and variant in one message). Re-run it after changing a prompt
 in `graph.py` or after Groq changes the configured model.
 
+## Deploy (Railway)
+
+`Procfile` tells Railway (or any Procfile-aware host) how to start the
+app: `uv run uvicorn bella_charm_agent.web:app --host 0.0.0.0 --port
+$PORT`. Not yet deployed/verified against a real Railway project --
+treat the Procfile as a best-effort starting point, not a confirmed
+recipe, until it's actually been run there.
+
+What a real deployment needs, beyond connecting the GitHub repo:
+
+- **Environment variables** (Railway's own secrets panel, never in a
+  file that ships with the code): `GROQ_API_KEY`, `DASHBOARD_USERNAME`,
+  `DASHBOARD_PASSWORD` (a real, unique password -- not the local-dev
+  placeholder), the six `PAYMENT_*` variables (no local
+  `config/payment_secrets.json` exists on the server), and
+  `BELLA_AGENT_DB_PATH` (see the next point). `BELLA_AGENT_MODEL` is
+  optional, same default as local.
+- **A persistent volume**, mounted at some path (e.g. `/data`), with
+  `BELLA_AGENT_DB_PATH` pointing inside it (e.g.
+  `/data/conversations.sqlite`). Without this, Railway's filesystem
+  resets on every restart/redeploy -- exactly the scenario the SqliteSaver
+  switch (see above) exists to survive, so skipping this volume would
+  make that work pointless in production.
+
 ## Known limitations (see "Not in v1" in the scope doc)
 
 - No per-design catalog: individual charm designs (a specific dog breed,
@@ -267,8 +291,6 @@ in `graph.py` or after Groq changes the configured model.
   delivered (`_deliver_to_customer` just prints). Both are isolated,
   small changes once the business's Meta access token arrives — see
   `web.py`.
-- Not deployed anywhere yet — runs locally only, as a single `uvicorn`
-  process (`web.py`). Railway (or similar) is the next step; the
-  persistent-checkpointer work only pays off there with a real volume
-  mounted at `BELLA_AGENT_DB_PATH`, since most hosting platforms wipe
-  the filesystem on every restart/redeploy otherwise.
+- Not deployed anywhere yet — the `Procfile` is prepared, but running it
+  on a real Railway project hasn't actually been done/verified. See
+  "Deploy (Railway)" above.
