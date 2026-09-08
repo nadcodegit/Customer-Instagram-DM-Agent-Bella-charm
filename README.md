@@ -130,7 +130,9 @@ src/bella_charm_agent/
   payment.py       reads bank/PayPal details from a local secrets file
   graph.py         nodes, LLM schemas, conditional edges, build_graph()
   runner.py        submit_customer_message() / resolve_pending_review()
-                   + an interactive terminal chat demo
+                   / list_pending_reviews() + an interactive terminal
+                   chat demo
+  web.py           the owner-facing review dashboard (FastAPI)
 tests/
   test_transitions.py       pure FSM transition functions (no LLM)
   test_cart_helpers.py      cart_line / cart_total
@@ -138,6 +140,7 @@ tests/
   test_interrupt_flow.py    the review pause/resume, at the graph level
   test_runner_queuing.py    a message arriving while a review is pending
   test_sqlite_persistence.py  state survives a simulated process restart
+  test_web.py               the review dashboard's routes (FastAPI TestClient)
   test_llm_quality_manual.py  opt-in: same tricky cases against the *real* model
   test_step_config.py       structural check (every step has a config entry)
 ```
@@ -177,6 +180,21 @@ sent anywhere — it's all local. Because state is persisted (see Setup),
 you can quit (Ctrl+C) mid-conversation and pick it back up next run —
 including a still-pending review.
 
+### Review dashboard
+
+```bash
+uv run uvicorn bella_charm_agent.web:app --reload
+```
+
+Opens on <http://localhost:8000>: lists every conversation currently
+paused for review (reads the same `data/conversations.sqlite` the CLI
+writes to, so a pending review created either way shows up here), each
+with an Approve / edit-then-send / Reject form. This is meant to be
+exactly what the business owner uses day to day -- there's deliberately
+no way to simulate an incoming customer message from this page; that
+stays a developer-only tool in the CLI above, to keep "what she needs"
+and "what I need to test with" separate.
+
 ## Test
 
 ```bash
@@ -199,6 +217,6 @@ in `graph.py` or after Groq changes the configured model.
   get no special handling.
 - No live Instagram integration yet — this runs against a simulated DM
   input (`runner.py`), not the real Meta/Instagram Messaging API.
-- No review UI yet — approving/editing/rejecting a pending review only
-  works from the terminal demo; the business owner can't use this
-  without one.
+- The review dashboard (`web.py`) has no authentication yet — fine while
+  it only runs on localhost; needs at least a password before it's
+  deployed anywhere reachable.

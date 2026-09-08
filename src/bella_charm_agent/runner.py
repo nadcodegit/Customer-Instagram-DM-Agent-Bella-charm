@@ -96,6 +96,34 @@ def submit_customer_message(customer_id: str, text: str) -> dict:
     return {"status": "sent", "draft_reply": result["draft_reply"]}
 
 
+def list_pending_reviews() -> list[dict]:
+    """Every conversation currently paused at await_owner_approval,
+    across all customers -- what the review dashboard (web.py) shows.
+
+    LangGraph doesn't track "which threads are paused" as a queryable
+    index on its own, so this scans the checkpointer's full history and
+    checks each distinct thread's `.next`. Fine at this scale (a small
+    business's DM volume) -- and avoids keeping a second, easy-to-drift
+    list of pending customer_ids in sync by hand.
+    """
+    thread_ids = {cp.config["configurable"]["thread_id"] for cp in _graph.checkpointer.list(None)}
+    pending = []
+    for thread_id in thread_ids:
+        snapshot = _graph.get_state({"configurable": {"thread_id": thread_id}})
+        if not snapshot.next:
+            continue
+        values = snapshot.values
+        pending.append(
+            {
+                "customer_id": values["customer_id"],
+                "customer_message": values["messages"][-1].content if values["messages"] else "",
+                "draft_reply": values["draft_reply"],
+                "needs_human": values["needs_human"],
+            }
+        )
+    return pending
+
+
 def resolve_pending_review(customer_id: str, decision: dict) -> dict:
     """Resumes a paused conversation with the owner's decision:
     {"action": "approve"}, {"action": "edit", "text": "..."}, or
