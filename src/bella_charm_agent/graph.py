@@ -47,15 +47,19 @@ def _last_message_text(state: ConversationState) -> str:
 def _finalize_reply(update: dict) -> dict:
     """Every draft-producing return passes through here (see the end of
     handle_new_request / handle_step_answer / handle_post_order_start):
-    defaults needs_human to False so a stale True from an earlier
-    escalated turn never silently carries forward onto an unrelated,
-    well-handled reply -- LangGraph only replaces keys a node actually
-    returns, so a node that forgets to mention needs_human would
-    otherwise leave whatever was already in state untouched. Only the
-    specific branches that actually escalate (handle_new_request's
-    'other' case, and _handle_off_topic_message's escalate branch) set
-    it True explicitly, and that explicit value always wins here since
-    setdefault only fills in a *missing* key.
+    defaults needs_human to False so a stale True from an earlier turn
+    never silently carries forward onto an unrelated, well-handled reply
+    -- LangGraph only replaces keys a node actually returns, so a node
+    that forgets to mention needs_human would otherwise leave whatever
+    was already in state untouched. Only one place sets it True
+    explicitly (_t_final_confirm's "Yes" branch -- the purchase
+    confirmation carrying bank/PayPal details, the one reply where a
+    wrong LLM output has real financial consequences), and that explicit
+    value always wins here since setdefault only fills in a *missing*
+    key. An out-of-scope ("other") message is logged to owner_followups
+    for her to follow up on personally, but -- like everything else --
+    sends its fixed, pre-approved holding reply automatically; it no
+    longer blocks on review.
     """
     update.setdefault("needs_human", False)
     return update
@@ -145,7 +149,12 @@ def handle_new_request(state: ConversationState) -> dict:
         return _finalize_reply({"draft_reply": PAYMENT_PROOF_REPLY})
 
     if result.intent == "other":
-        return _finalize_reply({"draft_reply": OWNER_HANDOFF_REPLY, "needs_human": True})
+        return _finalize_reply(
+            {
+                "draft_reply": OWNER_HANDOFF_REPLY,
+                "owner_followups": state["owner_followups"] + [_last_message_text(state)],
+            }
+        )
 
     return _finalize_reply(
         {
@@ -230,7 +239,6 @@ def _handle_off_topic_message(state: ConversationState, resume_question: str) ->
         return {
             "draft_reply": f"I'll pass that along to the owner so she can get back to you on it. {resume_question}",
             "owner_followups": state["owner_followups"] + [_last_message_text(state)],
-            "needs_human": True,
         }
 
     return {"draft_reply": f"{answer}\n\n{resume_question}"}
@@ -475,7 +483,10 @@ def _t_final_confirm(state: ConversationState, answer: str) -> dict:
             f"{load_payment_details()}\n\n"
             "Your order will ship in 3-5 business days."
         )
-        return {"current_step": "order_placed", "draft_reply": reply}
+        # The one reply with real financial consequences if the LLM got
+        # something wrong upstream (cart total, bank details) -- the only
+        # step that still waits for a human to look before it goes out.
+        return {"current_step": "order_placed", "draft_reply": reply, "needs_human": True}
     return {
         "current_step": "awaiting_more_items",
         "draft_reply": "No problem! " + STEP_CONFIG["awaiting_more_items"].question(state),
@@ -684,12 +695,13 @@ def handle_post_order_start(state: ConversationState) -> dict:
 
 
 def await_owner_approval(state: ConversationState) -> dict:
-    """A confidently in-scope reply (needs_human False -- Scenario 1/2/3:
-    price/cart/checkout, store hours, payment-proof) sends automatically,
-    with nobody in the loop. Anything escalated to the owner (needs_human
-    True -- genuinely out of scope) pauses the graph via `interrupt()` and
-    hands the draft to whoever is reviewing it (see runner.py's
-    resolve_pending_review) -- the checkpointed state sits frozen here
+    """Almost everything (needs_human False -- price/cart/checkout, store
+    hours, payment-proof, and now the "other" holding reply too) sends
+    automatically, with nobody in the loop. Only _t_final_confirm's "Yes"
+    branch sets needs_human True -- the purchase confirmation carrying
+    bank/PayPal details -- and pauses the graph via `interrupt()`, handing
+    the draft to whoever is reviewing it (see runner.py's
+    resolve_pending_review). The checkpointed state sits frozen here
     until she resumes it with a decision. Nothing is ever sent to the
     customer before this returns `approved: True`.
     """

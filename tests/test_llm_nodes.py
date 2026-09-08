@@ -38,11 +38,15 @@ def test_handle_new_request_store_hours(make_state, monkeypatch, fake_llm):
     assert result["needs_human"] is False
 
 
-def test_handle_new_request_other_flags_for_human_without_answering(make_state, monkeypatch, fake_llm):
+def test_handle_new_request_other_sends_holding_reply_and_logs_for_the_owner(make_state, monkeypatch, fake_llm):
+    # "other" no longer gates on review -- its reply is fixed/pre-approved
+    # same as everything else, so it sends automatically. The owner still
+    # gets to see it, just via owner_followups instead of a live pause.
     monkeypatch.setattr(graph, "_llm", fake_llm(graph.NewRequestClassification(intent="other")))
     result = graph.handle_new_request(make_state("can you make me a custom design?"))
-    assert result["needs_human"] is True
+    assert result["needs_human"] is False
     assert result["draft_reply"] == graph.OWNER_HANDOFF_REPLY
+    assert result["owner_followups"] == ["can you make me a custom design?"]
 
 
 def test_handle_new_request_greeting_gets_a_friendly_reply_not_a_handoff(make_state, monkeypatch, fake_llm):

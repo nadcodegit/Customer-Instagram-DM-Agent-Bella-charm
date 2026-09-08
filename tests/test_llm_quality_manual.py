@@ -74,8 +74,12 @@ def test_new_request_classifier_recognizes_store_hours(make_state):
 
 
 def test_new_request_classifier_recognizes_out_of_scope_requests(make_state):
+    # "other" sends its fixed holding reply automatically now -- the
+    # signal that it needs the owner's personal attention is
+    # owner_followups, not needs_human/a review pause.
     result = graph.handle_new_request(make_state("can you make me a custom engraved necklace?"))
-    assert result["needs_human"] is True
+    assert result["needs_human"] is False
+    assert result["owner_followups"] == ["can you make me a custom engraved necklace?"]
 
 
 def test_add_to_cart_extracts_a_mentioned_quantity(make_state):

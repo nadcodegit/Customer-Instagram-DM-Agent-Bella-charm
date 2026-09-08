@@ -4,9 +4,10 @@ review decision once one comes in.
 This stands in for the future webhook adapter + review UI: same graph,
 same state, just Python function calls instead of an HTTP request from
 Meta and a click in some review interface. `submit_customer_message`
-covers both outcomes now that a confidently in-scope reply (Scenario
-1/2/3) sends automatically and only a genuinely out-of-scope one pauses
-for review (see await_owner_approval in graph.py):
+covers both outcomes -- almost everything (including the "other"
+out-of-scope holding reply) sends automatically now; only the final
+purchase confirmation (bank/PayPal details) still pauses for review, see
+await_owner_approval in graph.py:
 
   - Auto-sent: the graph ran straight through -- there's a final
     draft_reply and nothing more to do.
@@ -36,9 +37,35 @@ def submit_customer_message(customer_id: str, text: str) -> dict:
     and went out automatically, or {"status": "pending_review",
     "customer_message": ..., "draft_reply": ..., "needs_human": True} if
     it's paused waiting on the owner (see resolve_pending_review).
+
+    If a review is *already* pending on this thread (the customer sent
+    another message before the owner got to the last one), this does
+    **not** start an independent turn -- that could race with, or
+    silently orphan, the pending one (see the "girlfriend's birthday"
+    incident: a second message ran the graph fresh, and the first,
+    already-escalated message could never be resumed afterwards). Instead
+    it appends the new message to the paused conversation via
+    `update_state` (no node runs) and returns the *same* pending review,
+    so the owner sees the full context -- not just the first message --
+    once she gets to it. The payload is rebuilt from `existing.values`
+    (not `existing.tasks[...].interrupts`) because the *first*
+    `update_state` call permanently clears the interrupt info from the
+    snapshot -- a third message arriving would find nothing left to read.
     """
     config = {"configurable": {"thread_id": customer_id}}
     existing = _graph.get_state(config)
+
+    if existing.next:
+        _graph.update_state(config, {"messages": [HumanMessage(content=text)]})
+        values = _graph.get_state(config).values
+        return {
+            "status": "pending_review",
+            "customer_id": values["customer_id"],
+            "customer_message": values["messages"][-1].content,
+            "draft_reply": values["draft_reply"],
+            "needs_human": values["needs_human"],
+            "queued_messages": [m.content for m in values["messages"]],
+        }
 
     if existing.values:
         update = {"messages": [HumanMessage(content=text)]}
@@ -79,6 +106,8 @@ if __name__ == "__main__":
         print("\n--- pending owner review (needs_human) ---")
         print(f"Customer said: {review['customer_message']}")
         print(f"Draft reply:   {review['draft_reply']}")
+        if "queued_messages" in review:
+            print(f"(more arrived while pending: {review['queued_messages']})")
 
         choice = input("Owner: [a]pprove / [e]dit / [r]eject? ").strip().lower()
         if choice == "e":
