@@ -1,24 +1,89 @@
-"""A minimal owner-facing review dashboard: list pending reviews, and
-approve/edit/reject each one. No JavaScript -- plain HTML forms, since
-there's nothing here that needs it.
-
-This is meant to be exactly what the business owner eventually uses, so
-it only shows what's relevant to her. Simulating an incoming customer
-message stays in runner.py's CLI on purpose, not here -- that's a
-developer testing tool, not something she should see a button for.
+"""The single deployable app: the incoming-DM webhook and the owner's
+review dashboard, served together so the whole thing runs as one process.
 
 Run with:
     uv run uvicorn bella_charm_agent.web:app --reload
+
+--- Webhook (incoming DMs) ---
+
+`/webhook` accepts a simulated payload -- Meta's real Instagram webhook
+JSON isn't wired up yet (blocked on the business's Meta access token, not
+on anything here). `_extract_incoming_message` is the *only* place that
+understands the incoming payload's shape; swapping in the real Meta
+format later means changing that one function (and the Pydantic model
+above it), not the route, not runner.py, not graph.py.
+
+--- Review dashboard ---
+
+Lists every conversation currently paused for review, each with
+Approve / edit-then-send / Reject forms -- plain HTML, no JavaScript.
+This is meant to be exactly what the business owner eventually uses, so
+it only shows what's relevant to her. Simulating an incoming customer
+message stays a developer-only tool (see runner.py's CLI, or POST
+/webhook directly), not something she should see a button for.
+
+--- Delivering the final reply ---
+
+Also blocked on the same Meta access token: `_deliver_to_customer` is
+the one place a real Instagram Send API call will go once it's
+available. Everything upstream already treats "sent"/"approved" as
+final, so nothing else will need to change when that arrives.
+
+Neither route has authentication yet -- fine for localhost, needed
+before this is deployed anywhere reachable.
 """
 
 import html
 
 from fastapi import FastAPI, Form
+from pydantic import BaseModel
+
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from .runner import list_pending_reviews, resolve_pending_review
+from .runner import list_pending_reviews, resolve_pending_review, submit_customer_message
 
-app = FastAPI(title="Bella Charm London -- Pending Reviews")
+app = FastAPI(title="Bella Charm London")
+
+
+def _deliver_to_customer(customer_id: str, text: str) -> None:
+    """Stub: prints instead of actually sending, until a real Instagram
+    Send API call can replace this body."""
+    print(f"[WOULD SEND to {customer_id}]: {text}")
+
+
+# ---------------------------------------------------------------------------
+# Webhook (incoming DMs)
+# ---------------------------------------------------------------------------
+
+
+class SimulatedDMPayload(BaseModel):
+    """Stand-in for Meta's real webhook payload -- see the module
+    docstring. Deliberately just the two things submit_customer_message
+    already needs."""
+
+    customer_id: str
+    text: str
+
+
+def _extract_incoming_message(payload: SimulatedDMPayload) -> tuple[str, str]:
+    """(customer_id, message_text) from the incoming payload. The one
+    function that needs to change when the real Meta webhook format
+    replaces this simulated one."""
+    return payload.customer_id, payload.text
+
+
+@app.post("/webhook")
+def webhook(payload: SimulatedDMPayload) -> dict:
+    customer_id, text = _extract_incoming_message(payload)
+    result = submit_customer_message(customer_id, text)
+    if result["status"] == "sent":
+        _deliver_to_customer(customer_id, result["draft_reply"])
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Review dashboard
+# ---------------------------------------------------------------------------
 
 _PAGE = """<!doctype html>
 <html>
@@ -79,5 +144,7 @@ def resolve(customer_id: str, action: str = Form(...), edited_text: str = Form("
         decision = {"action": "reject"}
     else:
         decision = {"action": "approve"}
-    resolve_pending_review(customer_id, decision)
+    result = resolve_pending_review(customer_id, decision)
+    if result.get("approved"):
+        _deliver_to_customer(customer_id, result["draft_reply"])
     return RedirectResponse(url="/", status_code=303)

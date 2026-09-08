@@ -115,3 +115,72 @@ def test_resolve_reject_via_http(client, monkeypatch, fake_llm):
     client.post("/resolve/dashboard_test_6", data={"action": "reject"}, follow_redirects=False)
     final = runner._graph.get_state({"configurable": {"thread_id": "dashboard_test_6"}})
     assert final.values["approved"] is False
+
+
+# ---------------------------------------------------------------------------
+# /webhook
+# ---------------------------------------------------------------------------
+
+
+def test_webhook_auto_sendable_message_delivers_immediately(client, monkeypatch, fake_llm):
+    monkeypatch.setattr(graph, "_llm", fake_llm(graph.NewRequestClassification(intent="store_hours")))
+    delivered = []
+    monkeypatch.setattr(web, "_deliver_to_customer", lambda customer_id, text: delivered.append((customer_id, text)))
+
+    response = client.post("/webhook", json={"customer_id": "webhook_test_1", "text": "are you open?"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "sent"
+    assert "9:00" in body["draft_reply"]
+    assert delivered == [("webhook_test_1", body["draft_reply"])]
+
+
+def test_webhook_message_needing_review_does_not_deliver_yet(client, monkeypatch, fake_llm):
+    monkeypatch.setattr(graph, "_llm", fake_llm(graph.NewRequestClassification(intent="price_inquiry", category="Charm")))
+    delivered = []
+    monkeypatch.setattr(web, "_deliver_to_customer", lambda customer_id, text: delivered.append((customer_id, text)))
+
+    response = client.post("/webhook", json={"customer_id": "webhook_test_2", "text": "how much is a charm?"})
+    assert response.status_code == 200
+    assert response.json()["status"] == "sent"  # price inquiry auto-sends too
+    assert delivered  # sanity: this path does deliver
+
+
+def test_webhook_can_originate_a_fresh_pending_review_and_it_reaches_the_dashboard(
+    client, monkeypatch, fake_llm
+):
+    monkeypatch.setattr(graph, "load_payment_details", lambda: "Sort Code: 000000")
+    customer_id = "webhook_test_3"
+    config = {"configurable": {"thread_id": customer_id}}
+
+    # Drive to a *resting* awaiting_final_confirm state via a real invoke
+    # (not update_state, which would leave .next non-empty and make the
+    # webhook message below look like it's queuing onto an
+    # already-pending review instead of genuinely triggering one for the
+    # first time).
+    monkeypatch.setattr(
+        graph,
+        "_llm",
+        fake_llm(graph.AddressExtraction(contains_address=True, address="1 High St", consistent_with_destination=True)),
+    )
+    seed_state = {
+        **runner.new_conversation_state(customer_id),
+        "current_step": "awaiting_delivery_address",
+        "cart": _CART,
+        "delivery_destination": "UK",
+        "messages": [HumanMessage(content="1 High St")],
+    }
+    runner._graph.invoke(seed_state, config)
+    assert runner._graph.get_state(config).next == ()  # sanity: genuinely at rest, nothing pending
+
+    monkeypatch.setattr(graph, "_llm", fake_llm(graph.StepAnswerMatch(matched_option="Yes")))
+    delivered = []
+    monkeypatch.setattr(web, "_deliver_to_customer", lambda cid, text: delivered.append((cid, text)))
+
+    response = client.post("/webhook", json={"customer_id": customer_id, "text": "yes"})
+    assert response.status_code == 200
+    assert response.json()["status"] == "pending_review"
+    assert delivered == []  # not delivered -- still waiting on the owner
+
+    dashboard_html = client.get("/").text
+    assert "Sort Code: 000000" in dashboard_html

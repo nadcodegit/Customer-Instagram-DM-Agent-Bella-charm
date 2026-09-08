@@ -143,6 +143,7 @@ tests/
   test_web.py               the review dashboard's routes (FastAPI TestClient)
   test_llm_quality_manual.py  opt-in: same tricky cases against the *real* model
   test_step_config.py       structural check (every step has a config entry)
+  test_payment.py           env-var vs. local-file precedence for payment details
 ```
 
 ## Setup
@@ -166,6 +167,17 @@ The database file defaults to `data/conversations.sqlite` (gitignored,
 created automatically); override with `BELLA_AGENT_DB_PATH` to point it
 somewhere else (e.g. a mounted volume in a real deployment).
 
+Both secrets work the same way: a real deployment sets them as actual
+environment variables (in the hosting platform's own secrets panel,
+never in a file that ships with the code); locally, `GROQ_API_KEY` comes
+from `.env` and the bank/PayPal details from
+`config/payment_secrets.json`, same as before. For payment details
+specifically, six `PAYMENT_*` environment variables
+(`PAYMENT_BANK_NAME`, `PAYMENT_ACCOUNT_NAME`, `PAYMENT_SORT_CODE`,
+`PAYMENT_ACCOUNT_NUMBER`, `PAYMENT_IBAN`, `PAYMENT_PAYPAL`) take
+priority over the file whenever any of them are set -- see
+`payment.py`.
+
 ## Run
 
 ```bash
@@ -180,20 +192,46 @@ sent anywhere — it's all local. Because state is persisted (see Setup),
 you can quit (Ctrl+C) mid-conversation and pick it back up next run —
 including a still-pending review.
 
-### Review dashboard
+### Web app (webhook + review dashboard)
 
 ```bash
 uv run uvicorn bella_charm_agent.web:app --reload
 ```
 
-Opens on <http://localhost:8000>: lists every conversation currently
-paused for review (reads the same `data/conversations.sqlite` the CLI
-writes to, so a pending review created either way shows up here), each
-with an Approve / edit-then-send / Reject form. This is meant to be
-exactly what the business owner uses day to day -- there's deliberately
-no way to simulate an incoming customer message from this page; that
-stays a developer-only tool in the CLI above, to keep "what she needs"
-and "what I need to test with" separate.
+This is the single process meant to actually be deployed -- everything
+lives in one FastAPI app (`web.py`):
+
+- `POST /webhook` -- where an incoming DM arrives. For now it accepts a
+  **simulated** payload (`{"customer_id": "...", "text": "..."}`), not
+  Meta's real Instagram webhook format -- that's blocked on the
+  business's Meta access token, not on anything here.
+  `_extract_incoming_message` is the one function that knows the
+  payload's shape, so swapping in the real format later means changing
+  that function (and the Pydantic model above it), not the route, not
+  `runner.py`, not `graph.py`.
+- `GET /` -- the review dashboard. Lists every conversation currently
+  paused for review (reads the same `data/conversations.sqlite` the CLI
+  writes to, so a pending review created via `/webhook` or the CLI shows
+  up here either way), each with an Approve / edit-then-send / Reject
+  form. This is meant to be exactly what the business owner uses day to
+  day -- there's deliberately no way to simulate an incoming customer
+  message from this page; that stays a developer-only tool (the CLI
+  above, or `POST /webhook` directly), to keep "what she needs" and
+  "what I need to test with" separate.
+
+Try it locally without a real webhook:
+
+```bash
+curl -X POST http://localhost:8000/webhook \
+  -H "Content-Type: application/json" \
+  -d '{"customer_id": "test_customer", "text": "how much is a charm?"}'
+```
+
+Delivering the final reply (auto-sent or approved) is also a stub for
+now -- `_deliver_to_customer` just prints, until a real Instagram Send
+API call can replace it once the access token arrives. Neither route has
+authentication yet; fine for localhost, needed before this is deployed
+anywhere reachable.
 
 ## Test
 
@@ -215,8 +253,13 @@ in `graph.py` or after Groq changes the configured model.
   subcategory. Asking about one gets a generic answer, not a real yes/no.
 - No image understanding: customers who send photos (common in practice)
   get no special handling.
-- No live Instagram integration yet — this runs against a simulated DM
-  input (`runner.py`), not the real Meta/Instagram Messaging API.
-- The review dashboard (`web.py`) has no authentication yet — fine while
-  it only runs on localhost; needs at least a password before it's
-  deployed anywhere reachable.
+- No live Instagram integration yet — `/webhook` accepts a simulated
+  payload, not Meta's real format, and replies are never actually
+  delivered (`_deliver_to_customer` just prints). Both are isolated,
+  small changes once the business's Meta access token arrives — see
+  `web.py`.
+- Neither `/webhook` nor the review dashboard has authentication yet —
+  fine while this only runs on localhost; needs at least a shared
+  password before it's deployed anywhere reachable.
+- Not deployed anywhere yet — runs locally only, as a single `uvicorn`
+  process (`web.py`). Railway (or similar) is the next step.
