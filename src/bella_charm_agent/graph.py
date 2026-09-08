@@ -13,6 +13,7 @@ from typing import Literal
 from langchain_groq import ChatGroq
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 
 from .constants import (
@@ -41,6 +42,23 @@ def _llm() -> ChatGroq:
 
 def _last_message_text(state: ConversationState) -> str:
     return state["messages"][-1].content
+
+
+def _finalize_reply(update: dict) -> dict:
+    """Every draft-producing return passes through here (see the end of
+    handle_new_request / handle_step_answer / handle_post_order_start):
+    defaults needs_human to False so a stale True from an earlier
+    escalated turn never silently carries forward onto an unrelated,
+    well-handled reply -- LangGraph only replaces keys a node actually
+    returns, so a node that forgets to mention needs_human would
+    otherwise leave whatever was already in state untouched. Only the
+    specific branches that actually escalate (handle_new_request's
+    'other' case, and _handle_off_topic_message's escalate branch) set
+    it True explicitly, and that explicit value always wins here since
+    setdefault only fills in a *missing* key.
+    """
+    update.setdefault("needs_human", False)
+    return update
 
 
 # ---------------------------------------------------------------------------
@@ -118,28 +136,26 @@ def handle_new_request(state: ConversationState) -> dict:
     result = _classify_new_request(state)
 
     if result.intent == "store_hours":
-        return {
-            "draft_reply": f"{STORE_HOURS}\nAddress: {STORE_ADDRESS}",
-            "needs_human": False,
-        }
+        return _finalize_reply({"draft_reply": f"{STORE_HOURS}\nAddress: {STORE_ADDRESS}"})
 
     if result.intent == "greeting":
-        return {"draft_reply": GREETING_REPLY, "needs_human": False}
+        return _finalize_reply({"draft_reply": GREETING_REPLY})
 
     if result.intent == "payment_proof":
-        return {"draft_reply": PAYMENT_PROOF_REPLY, "needs_human": False}
+        return _finalize_reply({"draft_reply": PAYMENT_PROOF_REPLY})
 
     if result.intent == "other":
-        return {"draft_reply": OWNER_HANDOFF_REPLY, "needs_human": True}
+        return _finalize_reply({"draft_reply": OWNER_HANDOFF_REPLY, "needs_human": True})
 
-    return {
-        "draft_reply": f"{_price_answer(result.category)} Want me to show you the options?",
-        "current_step": "awaiting_browse_offer",
-        # Remember the category they already named (if any) so saying
-        # "yes" a moment later can skip straight past re-asking it.
-        "pending_selection": {"category": result.category} if result.category else {},
-        "needs_human": False,
-    }
+    return _finalize_reply(
+        {
+            "draft_reply": f"{_price_answer(result.category)} Want me to show you the options?",
+            "current_step": "awaiting_browse_offer",
+            # Remember the category they already named (if any) so saying
+            # "yes" a moment later can skip straight past re-asking it.
+            "pending_selection": {"category": result.category} if result.category else {},
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -174,8 +190,11 @@ def _match_step_answer(
         "product instead of literally saying 'yes', or only addressing "
         "part of a multi-part question). Use judgment about what they "
         "most likely mean in context, and return the exact matching option "
-        "string verbatim. Only if their reply genuinely doesn't relate to "
-        "any of the valid answers, leave matched_option null."
+        "string verbatim. But don't force it: if they're describing "
+        "something genuinely different from every listed option (e.g. "
+        "saying they'll pick the order up in person when the choices are "
+        "'UK'/'International' delivery -- that's neither), leave "
+        "matched_option null rather than guessing the closest-sounding one."
     )
     if result.matched_option not in options:
         # Guards against the model returning something outside the allowed
@@ -211,6 +230,7 @@ def _handle_off_topic_message(state: ConversationState, resume_question: str) ->
         return {
             "draft_reply": f"I'll pass that along to the owner so she can get back to you on it. {resume_question}",
             "owner_followups": state["owner_followups"] + [_last_message_text(state)],
+            "needs_human": True,
         }
 
     return {"draft_reply": f"{answer}\n\n{resume_question}"}
@@ -615,25 +635,26 @@ def handle_step_answer(state: ConversationState) -> dict:
     step: Step = state["current_step"]
 
     if step == "awaiting_delivery_address":
-        return _handle_delivery_address(state)
-    if step == "awaiting_add_to_cart_confirm":
-        return _handle_add_to_cart(state)
-    if step == "awaiting_more_items":
-        return _handle_more_items(state)
-    if step == "awaiting_category":
-        return _handle_category(state)
-    if step == "awaiting_browse_offer":
-        return _handle_browse_offer(state)
+        result = _handle_delivery_address(state)
+    elif step == "awaiting_add_to_cart_confirm":
+        result = _handle_add_to_cart(state)
+    elif step == "awaiting_more_items":
+        result = _handle_more_items(state)
+    elif step == "awaiting_category":
+        result = _handle_category(state)
+    elif step == "awaiting_browse_offer":
+        result = _handle_browse_offer(state)
+    else:
+        config = STEP_CONFIG[step]
+        options = config.options(state)
+        question = config.question(state)
+        match = _match_step_answer(state, options, question)
+        if match.matched_option is None:
+            result = _handle_off_topic_message(state, question)
+        else:
+            result = _TRANSITIONS[step](state, match.matched_option)
 
-    config = STEP_CONFIG[step]
-    options = config.options(state)
-    question = config.question(state)
-    match = _match_step_answer(state, options, question)
-
-    if match.matched_option is None:
-        return _handle_off_topic_message(state, question)
-
-    return _TRANSITIONS[step](state, match.matched_option)
+    return _finalize_reply(result)
 
 
 # ---------------------------------------------------------------------------
@@ -654,7 +675,40 @@ def handle_post_order_start(state: ConversationState) -> dict:
     """
     reconciliation_question = STEP_CONFIG["awaiting_payment_reconciliation"].question(state)
     result = _handle_off_topic_message(state, reconciliation_question)
-    return {**result, "current_step": "awaiting_payment_reconciliation"}
+    return _finalize_reply({**result, "current_step": "awaiting_payment_reconciliation"})
+
+
+# ---------------------------------------------------------------------------
+# Human review: every draft_reply passes through here before the run ends.
+# ---------------------------------------------------------------------------
+
+
+def await_owner_approval(state: ConversationState) -> dict:
+    """A confidently in-scope reply (needs_human False -- Scenario 1/2/3:
+    price/cart/checkout, store hours, payment-proof) sends automatically,
+    with nobody in the loop. Anything escalated to the owner (needs_human
+    True -- genuinely out of scope) pauses the graph via `interrupt()` and
+    hands the draft to whoever is reviewing it (see runner.py's
+    resolve_pending_review) -- the checkpointed state sits frozen here
+    until she resumes it with a decision. Nothing is ever sent to the
+    customer before this returns `approved: True`.
+    """
+    if not state["needs_human"]:
+        return {"approved": True}
+
+    decision = interrupt(
+        {
+            "customer_id": state["customer_id"],
+            "customer_message": _last_message_text(state),
+            "draft_reply": state["draft_reply"],
+            "needs_human": state["needs_human"],
+        }
+    )
+    if decision["action"] == "edit":
+        return {"draft_reply": decision["text"], "approved": True}
+    if decision["action"] == "reject":
+        return {"approved": False}
+    return {"approved": True}
 
 
 # ---------------------------------------------------------------------------
@@ -666,13 +720,16 @@ def build_graph(checkpointer=None):
     """Compile the graph. `checkpointer` persists state per customer_id
     (used as the LangGraph thread_id) across separate .invoke() calls --
     without it, every incoming DM would be treated as a brand-new
-    conversation with no memory of where the flow left off. Defaults to
-    an in-memory checkpointer, fine for local/mock runs.
+    conversation with no memory of where the flow left off, and
+    `interrupt()`/`Command(resume=...)` (see await_owner_approval) would
+    have nothing to pause and resume. Defaults to an in-memory
+    checkpointer, fine for local/mock runs.
     """
     graph = StateGraph(ConversationState)
     graph.add_node("handle_new_request", handle_new_request)
     graph.add_node("handle_step_answer", handle_step_answer)
     graph.add_node("handle_post_order_start", handle_post_order_start)
+    graph.add_node("await_owner_approval", await_owner_approval)
 
     graph.add_conditional_edges(
         START,
@@ -683,8 +740,9 @@ def build_graph(checkpointer=None):
             "handle_post_order_start": "handle_post_order_start",
         },
     )
-    graph.add_edge("handle_new_request", END)
-    graph.add_edge("handle_step_answer", END)
-    graph.add_edge("handle_post_order_start", END)
+    graph.add_edge("handle_new_request", "await_owner_approval")
+    graph.add_edge("handle_step_answer", "await_owner_approval")
+    graph.add_edge("handle_post_order_start", "await_owner_approval")
+    graph.add_edge("await_owner_approval", END)
 
     return graph.compile(checkpointer=checkpointer or MemorySaver())

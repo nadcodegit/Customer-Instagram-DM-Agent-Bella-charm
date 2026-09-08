@@ -150,3 +150,14 @@ def test_variant_matcher_recognizes_the_newer_charm_subcategories(make_state):
 def test_new_request_classifier_recognizes_a_payment_proof_question(make_state):
     result = graph.handle_new_request(make_state("Thank you, want me to send the receipt here?"))
     assert result["draft_reply"] == graph.PAYMENT_PROOF_REPLY
+
+
+def test_delivery_destination_matcher_does_not_force_a_match_for_in_person_pickup(make_state):
+    # Regression: "I'll come and take it from you" isn't UK delivery or
+    # International delivery -- it's neither, and used to get force-matched
+    # to "UK" instead of correctly falling through to escalation.
+    state = make_state("I will come and take it from you")
+    match = graph._match_step_answer(
+        state, ["UK", "International"], "Is this delivery within the UK, or international?"
+    )
+    assert match.matched_option is None

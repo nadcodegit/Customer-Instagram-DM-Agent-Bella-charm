@@ -63,6 +63,10 @@ class ConversationState(TypedDict):
     draft_reply: str
     needs_human: bool
     owner_followups: list[str]
+    # Set by await_owner_approval once the owner has reviewed draft_reply
+    # for this turn: True to actually send it, False if rejected. None
+    # means no decision has been made yet for the current draft.
+    approved: bool | None
 
 
 def new_conversation_state(customer_id: str) -> ConversationState:
@@ -78,4 +82,5 @@ def new_conversation_state(customer_id: str) -> ConversationState:
         draft_reply="",
         needs_human=False,
         owner_followups=[],
+        approved=None,
     )
