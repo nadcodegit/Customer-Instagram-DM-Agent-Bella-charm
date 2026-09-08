@@ -5,6 +5,8 @@ listed, and that resolving one through the HTTP route has the same
 effect as resolving it directly.
 """
 
+import base64
+
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import HumanMessage
@@ -12,6 +14,11 @@ from langchain_core.messages import HumanMessage
 from bella_charm_agent import graph, runner, web
 
 _CART = [{"category": "Charm", "variant": "Heart", "price": 5, "quantity": 1, "tag": None}]
+
+
+def _basic_auth_headers(username: str, password: str) -> dict:
+    encoded = base64.b64encode(f"{username}:{password}".encode()).decode()
+    return {"Authorization": f"Basic {encoded}"}
 
 
 @pytest.fixture(autouse=True)
@@ -37,7 +44,11 @@ def _seed_pending_final_confirm(customer_id: str) -> None:
 
 @pytest.fixture
 def client():
-    return TestClient(web.app)
+    """Authenticated by default (matches conftest's DASHBOARD_USERNAME/
+    DASHBOARD_PASSWORD test defaults) -- most tests here are about the
+    dashboard/webhook behavior, not auth itself; see test_dashboard_*auth*
+    below for that."""
+    return TestClient(web.app, headers=_basic_auth_headers("test", "test"))
 
 
 def test_list_pending_reviews_is_empty_with_nothing_pending():
@@ -184,3 +195,45 @@ def test_webhook_can_originate_a_fresh_pending_review_and_it_reaches_the_dashboa
 
     dashboard_html = client.get("/").text
     assert "Sort Code: 000000" in dashboard_html
+
+
+# ---------------------------------------------------------------------------
+# Auth -- the dashboard requires it, /webhook deliberately doesn't (Meta
+# doesn't authenticate a webhook with HTTP Basic Auth anyway)
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_requires_auth():
+    unauthenticated = TestClient(web.app)
+    response = unauthenticated.get("/")
+    assert response.status_code == 401
+
+
+def test_dashboard_rejects_wrong_credentials():
+    wrong_creds = TestClient(web.app, headers=_basic_auth_headers("test", "wrong-password"))
+    response = wrong_creds.get("/")
+    assert response.status_code == 401
+
+
+def test_dashboard_accepts_correct_credentials(client):
+    response = client.get("/")
+    assert response.status_code == 200
+
+
+def test_resolve_requires_auth(monkeypatch, fake_llm):
+    monkeypatch.setattr(graph, "load_payment_details", lambda: "Sort Code: 000000")
+    monkeypatch.setattr(graph, "_llm", fake_llm(graph.StepAnswerMatch(matched_option="Yes")))
+    _seed_pending_final_confirm("auth_test_1")
+
+    unauthenticated = TestClient(web.app)
+    response = unauthenticated.post("/resolve/auth_test_1", data={"action": "approve"}, follow_redirects=False)
+    assert response.status_code == 401
+    # Nothing was actually resolved -- still pending.
+    assert len(runner.list_pending_reviews()) == 1
+
+
+def test_webhook_does_not_require_auth(monkeypatch, fake_llm):
+    monkeypatch.setattr(graph, "_llm", fake_llm(graph.NewRequestClassification(intent="store_hours")))
+    unauthenticated = TestClient(web.app)
+    response = unauthenticated.post("/webhook", json={"customer_id": "auth_test_2", "text": "are you open?"})
+    assert response.status_code == 200

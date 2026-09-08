@@ -7,6 +7,8 @@ logic (routing, state updates, cart math) without hitting the network or
 depending on how well a real model happens to answer that day.
 """
 
+import os
+
 import pytest
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
@@ -16,6 +18,14 @@ from bella_charm_agent.state import new_conversation_state
 # Only matters for the opt-in live_llm tests (see test_llm_quality_manual.py)
 # -- harmless for everything else, since they never read GROQ_API_KEY.
 load_dotenv()
+
+# web.py refuses to import without these set (the review dashboard must
+# never come up unprotected). Force-set (not setdefault) -- unlike
+# GROQ_API_KEY, tests have no reason to want whatever's in a dev's local
+# .env here; they need one known, fixed value, not "whatever the
+# developer happened to put in config/payment_secrets.json's neighbor".
+os.environ["DASHBOARD_USERNAME"] = "test"
+os.environ["DASHBOARD_PASSWORD"] = "test"
 
 
 class _FakeStructuredOutput:

@@ -29,13 +29,24 @@ the one place a real Instagram Send API call will go once it's
 available. Everything upstream already treats "sent"/"approved" as
 final, so nothing else will need to change when that arrives.
 
-Neither route has authentication yet -- fine for localhost, needed
-before this is deployed anywhere reachable.
+--- Auth ---
+
+The dashboard carries bank details and customer messages, so it's
+gated behind HTTP Basic Auth (DASHBOARD_USERNAME / DASHBOARD_PASSWORD,
+required -- this module refuses to import without them set, so it's
+never possible to accidentally deploy it unprotected). `/webhook` is
+deliberately left unauthenticated: it's meant to be called by Meta, not
+a browser, and HTTP Basic Auth isn't how Meta authenticates a webhook
+anyway (that's a verify token at subscription time plus a signature
+header on each request -- both arrive with the real webhook format).
 """
 
 import html
+import os
+import secrets
 
-from fastapi import FastAPI, Form
+from fastapi import Depends, FastAPI, Form, HTTPException, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -43,6 +54,32 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from .runner import list_pending_reviews, resolve_pending_review, submit_customer_message
 
 app = FastAPI(title="Bella Charm London")
+
+_DASHBOARD_USERNAME = os.environ.get("DASHBOARD_USERNAME")
+_DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD")
+if not _DASHBOARD_USERNAME or not _DASHBOARD_PASSWORD:
+    raise RuntimeError(
+        "DASHBOARD_USERNAME and DASHBOARD_PASSWORD must both be set before "
+        "this app can start -- the review dashboard carries bank details "
+        "and customer messages, and must never be reachable without a "
+        "password. Set them in .env for local dev, or your hosting "
+        "platform's secrets panel for a real deployment."
+    )
+
+_security = HTTPBasic()
+
+
+def _require_owner(credentials: HTTPBasicCredentials = Depends(_security)) -> None:
+    # constant-time comparisons -- a naive `==` leaks how many leading
+    # characters matched via how long the comparison took.
+    correct_username = secrets.compare_digest(credentials.username, _DASHBOARD_USERNAME)
+    correct_password = secrets.compare_digest(credentials.password, _DASHBOARD_PASSWORD)
+    if not (correct_username and correct_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Basic"},
+        )
 
 
 def _deliver_to_customer(customer_id: str, text: str) -> None:
@@ -131,12 +168,12 @@ def _render_dashboard() -> str:
     return _PAGE.format(cards=cards or "<p>No pending reviews right now.</p>")
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/", response_class=HTMLResponse, dependencies=[Depends(_require_owner)])
 def dashboard() -> str:
     return _render_dashboard()
 
 
-@app.post("/resolve/{customer_id}")
+@app.post("/resolve/{customer_id}", dependencies=[Depends(_require_owner)])
 def resolve(customer_id: str, action: str = Form(...), edited_text: str = Form("")) -> RedirectResponse:
     if action == "edit":
         decision = {"action": "edit", "text": edited_text}

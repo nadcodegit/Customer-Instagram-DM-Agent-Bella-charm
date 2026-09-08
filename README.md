@@ -140,7 +140,7 @@ tests/
   test_interrupt_flow.py    the review pause/resume, at the graph level
   test_runner_queuing.py    a message arriving while a review is pending
   test_sqlite_persistence.py  state survives a simulated process restart
-  test_web.py               the review dashboard's routes (FastAPI TestClient)
+  test_web.py               dashboard/webhook routes + Basic Auth (FastAPI TestClient)
   test_llm_quality_manual.py  opt-in: same tricky cases against the *real* model
   test_step_config.py       structural check (every step has a config entry)
   test_payment.py           env-var vs. local-file precedence for payment details
@@ -229,9 +229,18 @@ curl -X POST http://localhost:8000/webhook \
 
 Delivering the final reply (auto-sent or approved) is also a stub for
 now -- `_deliver_to_customer` just prints, until a real Instagram Send
-API call can replace it once the access token arrives. Neither route has
-authentication yet; fine for localhost, needed before this is deployed
-anywhere reachable.
+API call can replace it once the access token arrives.
+
+The dashboard (`GET /` and `POST /resolve/{customer_id}`) is gated
+behind HTTP Basic Auth -- it carries bank details and customer messages.
+`DASHBOARD_USERNAME` and `DASHBOARD_PASSWORD` are **required**; the app
+refuses to start without both set (in `.env` locally, or the hosting
+platform's secrets panel for a real deployment), so it's never possible
+to accidentally deploy it unprotected. `/webhook` is deliberately left
+unauthenticated -- it's meant to be called by Meta, not a browser, and
+HTTP Basic Auth isn't how Meta authenticates a webhook anyway (that's a
+verify token at subscription time plus a signature header per request,
+both arriving with the real webhook format).
 
 ## Test
 
@@ -258,8 +267,8 @@ in `graph.py` or after Groq changes the configured model.
   delivered (`_deliver_to_customer` just prints). Both are isolated,
   small changes once the business's Meta access token arrives — see
   `web.py`.
-- Neither `/webhook` nor the review dashboard has authentication yet —
-  fine while this only runs on localhost; needs at least a shared
-  password before it's deployed anywhere reachable.
 - Not deployed anywhere yet — runs locally only, as a single `uvicorn`
-  process (`web.py`). Railway (or similar) is the next step.
+  process (`web.py`). Railway (or similar) is the next step; the
+  persistent-checkpointer work only pays off there with a real volume
+  mounted at `BELLA_AGENT_DB_PATH`, since most hosting platforms wipe
+  the filesystem on every restart/redeploy otherwise.
