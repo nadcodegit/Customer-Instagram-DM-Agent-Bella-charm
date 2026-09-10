@@ -17,6 +17,10 @@ nodes, conditional edges, checkpointer/memory, structured tool-calling,
 human-in-the-loop interrupts) against a real small business, not a toy
 example.
 
+For the non-technical guide to using the review dashboard day to day
+(written for the business owner, not a developer), see
+[OWNER_GUIDE.md](OWNER_GUIDE.md).
+
 ## What it handles
 
 Full scope is defined in
