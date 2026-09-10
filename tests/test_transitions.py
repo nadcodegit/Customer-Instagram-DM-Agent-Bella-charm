@@ -47,6 +47,17 @@ def test_variant_adds_to_pending_selection(make_state):
     assert result["current_step"] == "awaiting_add_to_cart_confirm"
 
 
+def test_variant_preserves_a_quantity_named_earlier(make_state):
+    # A quantity named back at the more-items step (see
+    # _advance_with_category_and_variant) shouldn't get dropped just
+    # because a variant is chosen afterwards -- and the confirmation
+    # question should reflect it, not silently ask about a single item.
+    state = make_state(pending_selection={"category": "Charm", "quantity": 2})
+    result = graph._t_variant(state, "Heart")
+    assert result["pending_selection"] == {"category": "Charm", "quantity": 2, "variant": "Heart"}
+    assert "2x" in result["draft_reply"]
+
+
 def test_more_items_yes_returns_to_category(make_state):
     result = graph._t_more_items(make_state(), "Yes")
     assert result["current_step"] == "awaiting_category"

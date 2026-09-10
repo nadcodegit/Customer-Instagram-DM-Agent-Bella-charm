@@ -113,6 +113,18 @@ def test_more_items_extractor_picks_up_a_named_category_and_variant(make_state):
     assert result["pending_selection"] == {"category": "Charm", "variant": "Heart"}
 
 
+def test_more_items_extractor_picks_up_a_named_category_and_quantity(make_state):
+    # Regression check for a real manual-testing session: "add 2 charms to
+    # my cart please" at the more-items step got misread as unrelated to
+    # the yes/no question and fell through to the off-topic/price-inquiry
+    # path, silently dropping the "2". Same fix as the named-variant case
+    # above, but for quantity.
+    state = make_state("add 2 charms to my cart please", cart=[])
+    result = graph._handle_more_items(state)
+    assert result["current_step"] == "awaiting_variant"
+    assert result["pending_selection"] == {"category": "Charm", "quantity": 2}
+
+
 def test_browse_offer_reuses_a_category_already_known_from_the_opening_message(make_state):
     # Regression check: a customer who opened with "how much is a charm?"
     # (category captured then) and later just says "yes" shouldn't be

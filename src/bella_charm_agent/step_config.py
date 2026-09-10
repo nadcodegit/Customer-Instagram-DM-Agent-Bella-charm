@@ -49,7 +49,15 @@ def _add_to_cart_question(state: ConversationState) -> str:
     category = state["pending_selection"]["category"]
     variant = state["pending_selection"]["variant"]
     price = CATEGORY_PRICES[category]
-    return f"Want me to add the {variant} {CATEGORY_SINGULAR[category]} (£{price}) to your cart?"
+    name = f"{variant} {CATEGORY_SINGULAR[category]}"
+    # A quantity may already be known from earlier in the conversation
+    # (e.g. "add 2 charms please" at the more-items step) -- reflect it
+    # here so the confirmation isn't silently about a different count than
+    # what's about to be added (see _handle_add_to_cart).
+    quantity = state["pending_selection"].get("quantity") or 1
+    if quantity > 1:
+        return f"Want me to add {quantity}x {name} (£{price} each) to your cart?"
+    return f"Want me to add the {name} (£{price}) to your cart?"
 
 
 def _final_confirm_question(state: ConversationState) -> str:

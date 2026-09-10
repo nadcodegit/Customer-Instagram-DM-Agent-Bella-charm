@@ -315,7 +315,11 @@ def _handle_browse_offer(state: ConversationState) -> dict:
 
 
 def _t_category(state: ConversationState, answer: str) -> dict:
-    pending = {"category": answer}
+    # Merges into whatever's already in pending_selection (same pattern as
+    # _t_variant below) instead of resetting outright, so a quantity
+    # stashed there by _advance_with_category_and_variant survives this
+    # step too, not just the variant one.
+    pending = {**state["pending_selection"], "category": answer}
     peek_state = {**state, "pending_selection": pending}
     return {
         "pending_selection": pending,
@@ -335,7 +339,10 @@ def _t_variant(state: ConversationState, answer: str) -> dict:
 
 
 def _advance_with_category_and_variant(
-    state: ConversationState, category: str, variant: str | None
+    state: ConversationState,
+    category: str,
+    variant: str | None,
+    quantity: int | None = None,
 ) -> dict:
     """Jump as far forward as the extracted info supports: straight to
     add-to-cart confirmation if a *valid* variant for that category is also
@@ -344,10 +351,19 @@ def _advance_with_category_and_variant(
     (awaiting_category itself, and the more-items digression) so a customer
     who names both in one message ("heart charm please") doesn't have to
     repeat themselves when asked "which one?" a moment later.
+
+    `quantity` is optional and, when given, is stashed into
+    pending_selection the same way category/variant are -- it rides along
+    through _t_category/_t_variant so a customer who says "2 charms please"
+    doesn't get asked to re-specify the count once they reach the
+    add-to-cart confirmation (see _handle_add_to_cart).
     """
+    pending: dict = {"category": category}
+    if quantity:
+        pending["quantity"] = quantity
     if variant and variant in CATEGORY_VARIANTS.get(category, []):
-        return _t_variant({**state, "pending_selection": {"category": category}}, variant)
-    return _t_category(state, category)
+        return _t_variant({**state, "pending_selection": pending}, variant)
+    return _t_category({**state, "pending_selection": pending}, category)
 
 
 def _variants_hint() -> str:
@@ -422,7 +438,13 @@ class MoreItemsAnswer(BaseModel):
     )
     wants_more: bool = Field(
         default=False,
-        description="True if they want to keep browsing. Only meaningful when matched is true.",
+        description=(
+            "True if they want to keep browsing. Naming a specific "
+            "category or item they want counts as yes even without the "
+            "word 'yes' (e.g. 'add 2 charms please' -> true) -- asking "
+            "for something *is* the answer, not a separate question. "
+            "Only meaningful when matched is true."
+        ),
     )
     category: Literal["Bracelet", "Charm", "Watch", "Accessories"] | None = Field(
         default=None,
@@ -440,6 +462,15 @@ class MoreItemsAnswer(BaseModel):
             "capture it here too."
         ),
     )
+    quantity: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "If they also mentioned how many of that item they want (e.g. "
+            "'yes, 2 charms please'), capture it here. Null if no number "
+            "was mentioned -- do not default to 1."
+        ),
+    )
 
 
 def _handle_more_items(state: ConversationState) -> dict:
@@ -448,12 +479,17 @@ def _handle_more_items(state: ConversationState) -> dict:
     result: MoreItemsAnswer = extractor.invoke(
         f'A customer was just asked: "{question}"\n'
         f'Their reply: "{_last_message_text(state)}"\n\n'
-        "Determine whether they want to keep browsing (yes/no). If they "
-        "also named a specific category (bracelet, charm, or watch) while "
+        "Determine whether they want to keep browsing (yes/no). Naming a "
+        "specific category or item they want counts as yes on its own -- "
+        "e.g. 'add 2 charms please' means wants_more is true, not just a "
+        "category+quantity with no answer to the actual question. If they "
+        "named a specific category (bracelet, charm, or watch) while "
         "answering, capture it. If they also named one of that category's "
         "specific variants in the same message, capture that too -- "
         "exactly as spelled here:\n"
         f"{_variants_hint()}\n\n"
+        "If they also mentioned how many they want (e.g. 'yes, 2 charms "
+        "please'), capture that too -- null if no number was mentioned.\n\n"
         "If their reply doesn't address this at all, set matched to false."
     )
 
@@ -462,7 +498,9 @@ def _handle_more_items(state: ConversationState) -> dict:
     if not result.wants_more:
         return _t_more_items(state, "No")
     if result.category:
-        return _advance_with_category_and_variant(state, result.category, result.variant)
+        return _advance_with_category_and_variant(
+            state, result.category, result.variant, result.quantity
+        )
     return _t_more_items(state, "Yes")
 
 
@@ -524,10 +562,15 @@ class AddToCartAnswer(BaseModel):
         default=False,
         description="True if they want it added. Only meaningful when matched is true.",
     )
-    quantity: int = Field(
-        default=1,
+    quantity: int | None = Field(
+        default=None,
         ge=1,
-        description="How many of this item they want, if a number was mentioned. Default 1.",
+        description=(
+            "How many of this item they want, if a number was mentioned "
+            "*in this reply*. Null if not mentioned here -- do not default "
+            "to 1, a quantity may already be known from earlier in the "
+            "conversation (see _handle_add_to_cart)."
+        ),
     )
     alternative_category: Literal["Bracelet", "Charm", "Watch", "Accessories"] | None = Field(
         default=None,
@@ -576,16 +619,21 @@ def _handle_add_to_cart(state: ConversationState) -> dict:
     if result.add_to_cart:
         category = state["pending_selection"]["category"]
         variant = state["pending_selection"]["variant"]
+        # A number mentioned in *this* reply wins; otherwise fall back to a
+        # quantity the customer already gave earlier (e.g. "add 2 charms
+        # please" at the more-items step -- see
+        # _advance_with_category_and_variant), then 1.
+        quantity = result.quantity or state["pending_selection"].get("quantity") or 1
         cart.append(
             {
                 "category": category,
                 "variant": variant,
                 "price": CATEGORY_PRICES[category],
-                "quantity": result.quantity,
+                "quantity": quantity,
                 "tag": None,
             }
         )
-        qty_note = f" x{result.quantity}" if result.quantity > 1 else ""
+        qty_note = f" x{quantity}" if quantity > 1 else ""
         reply_prefix = f"Added to your cart{qty_note}! "
 
     peek_state = {**state, "cart": cart}

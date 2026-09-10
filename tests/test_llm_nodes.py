@@ -214,6 +214,35 @@ def test_handle_add_to_cart_declined_with_invalid_alternative_variant_falls_back
     assert result["current_step"] == "awaiting_variant"
 
 
+def test_handle_add_to_cart_uses_quantity_named_earlier_when_not_restated(make_state, monkeypatch, fake_llm):
+    # Customer already said "2" back at the more-items step (see
+    # test_handle_more_items_yes_with_category_and_quantity_... below); a
+    # plain "yes" here shouldn't silently fall back to 1 just because this
+    # particular reply didn't repeat the number.
+    monkeypatch.setattr(graph, "_llm", fake_llm(graph.AddToCartAnswer(matched=True, add_to_cart=True)))
+    state = make_state(
+        "yes", pending_selection={"category": "Charm", "variant": "Heart", "quantity": 2}
+    )
+    result = graph._handle_add_to_cart(state)
+    assert result["cart"][0]["quantity"] == 2
+    assert "x2" in result["draft_reply"]
+
+
+def test_handle_add_to_cart_restated_quantity_overrides_the_earlier_one(make_state, monkeypatch, fake_llm):
+    # If they change their mind right at the confirm step ("yes, actually
+    # just 1 is fine"), what they say *now* should win over a quantity
+    # named earlier in the conversation.
+    monkeypatch.setattr(
+        graph, "_llm", fake_llm(graph.AddToCartAnswer(matched=True, add_to_cart=True, quantity=1))
+    )
+    state = make_state(
+        "yes, just 1 is fine",
+        pending_selection={"category": "Charm", "variant": "Heart", "quantity": 2},
+    )
+    result = graph._handle_add_to_cart(state)
+    assert result["cart"][0]["quantity"] == 1
+
+
 def test_handle_add_to_cart_off_topic_flags_owner_and_reasks(make_state, monkeypatch, fake_llm):
     monkeypatch.setattr(
         graph,
@@ -339,6 +368,51 @@ def test_handle_more_items_yes_with_category_and_variant_skips_to_add_to_cart_co
     result = graph._handle_more_items(make_state("yes, heart charm please"))
     assert result["current_step"] == "awaiting_add_to_cart_confirm"
     assert result["pending_selection"] == {"category": "Charm", "variant": "Heart"}
+
+
+def test_handle_more_items_yes_with_category_and_quantity_stashes_it_for_later(
+    make_state, monkeypatch, fake_llm
+):
+    monkeypatch.setattr(
+        graph,
+        "_llm",
+        fake_llm(graph.MoreItemsAnswer(matched=True, wants_more=True, category="Charm", quantity=2)),
+    )
+    # "add 2 charms to my cart please" -- named a category AND a quantity,
+    # but no specific variant yet, so this still asks "which Charm" -- the
+    # quantity just shouldn't get dropped in the meantime (see
+    # _handle_add_to_cart's regression test above).
+    result = graph._handle_more_items(make_state("add 2 charms to my cart please"))
+    assert result["current_step"] == "awaiting_variant"
+    assert result["pending_selection"] == {"category": "Charm", "quantity": 2}
+
+
+def test_more_items_quantity_survives_all_the_way_to_the_cart(make_state, monkeypatch, fake_llm):
+    """End-to-end regression test for the reported scenario: "add 2
+    charms to my cart please" at the more-items step, then a variant, then
+    a plain "yes" -- the "2" must not get dropped just because it was
+    mentioned before a specific variant was chosen."""
+    monkeypatch.setattr(
+        graph,
+        "_llm",
+        fake_llm(graph.MoreItemsAnswer(matched=True, wants_more=True, category="Charm", quantity=2)),
+    )
+    after_more_items = graph._handle_more_items(make_state("add 2 charms to my cart please"))
+    assert after_more_items["pending_selection"] == {"category": "Charm", "quantity": 2}
+
+    state_at_variant = make_state("Heart", pending_selection=after_more_items["pending_selection"])
+    after_variant = graph._t_variant(state_at_variant, "Heart")
+    assert after_variant["current_step"] == "awaiting_add_to_cart_confirm"
+    assert after_variant["pending_selection"] == {"category": "Charm", "quantity": 2, "variant": "Heart"}
+    assert "2x" in after_variant["draft_reply"]
+
+    monkeypatch.setattr(graph, "_llm", fake_llm(graph.AddToCartAnswer(matched=True, add_to_cart=True)))
+    state_at_confirm = make_state("yes", pending_selection=after_variant["pending_selection"])
+    after_confirm = graph._handle_add_to_cart(state_at_confirm)
+    assert after_confirm["cart"] == [
+        {"category": "Charm", "variant": "Heart", "price": 5, "quantity": 2, "tag": None}
+    ]
+    assert "x2" in after_confirm["draft_reply"]
 
 
 def test_handle_more_items_with_invalid_variant_for_category_falls_back_to_variant_step(
