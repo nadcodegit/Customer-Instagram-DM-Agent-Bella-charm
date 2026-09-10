@@ -133,6 +133,7 @@ src/bella_charm_agent/
                    / list_pending_reviews() + an interactive terminal
                    chat demo
   web.py           the owner-facing review dashboard (FastAPI)
+  observability.py logging config + Sentry error reporting setup
 tests/
   test_transitions.py       pure FSM transition functions (no LLM)
   test_cart_helpers.py      cart_line / cart_total
@@ -228,7 +229,7 @@ curl -X POST http://localhost:8000/webhook \
 ```
 
 Delivering the final reply (auto-sent or approved) is also a stub for
-now -- `_deliver_to_customer` just prints, until a real Instagram Send
+now -- `_deliver_to_customer` just logs, until a real Instagram Send
 API call can replace it once the access token arrives.
 
 The dashboard (`GET /` and `POST /resolve/{customer_id}`) is gated
@@ -259,9 +260,10 @@ in `graph.py` or after Groq changes the configured model.
 
 `Procfile` tells Railway (or any Procfile-aware host) how to start the
 app: `uv run uvicorn bella_charm_agent.web:app --host 0.0.0.0 --port
-$PORT`. Not yet deployed/verified against a real Railway project --
-treat the Procfile as a best-effort starting point, not a confirmed
-recipe, until it's actually been run there.
+$PORT`. Deployed and verified against a real Railway project -- a full
+end-to-end run (price inquiry through checkout, the human-review gate,
+and approve/edit/reject from the live dashboard) has been tested
+against the deployed instance, not just locally.
 
 What a real deployment needs, beyond connecting the GitHub repo:
 
@@ -270,14 +272,36 @@ What a real deployment needs, beyond connecting the GitHub repo:
   `DASHBOARD_PASSWORD` (a real, unique password -- not the local-dev
   placeholder), the six `PAYMENT_*` variables (no local
   `config/payment_secrets.json` exists on the server), and
-  `BELLA_AGENT_DB_PATH` (see the next point). `BELLA_AGENT_MODEL` is
-  optional, same default as local.
+  `BELLA_AGENT_DB_PATH` (see the next point). `BELLA_AGENT_MODEL` and
+  `SENTRY_DSN` are optional, same as local (see "Observability" below).
 - **A persistent volume**, mounted at some path (e.g. `/data`), with
   `BELLA_AGENT_DB_PATH` pointing inside it (e.g.
   `/data/conversations.sqlite`). Without this, Railway's filesystem
   resets on every restart/redeploy -- exactly the scenario the SqliteSaver
   switch (see above) exists to survive, so skipping this volume would
   make that work pointless in production.
+
+## Observability
+
+This handles real customer messages and real bank/PayPal details, so
+silent failures aren't acceptable -- if Groq is down or a request
+times out mid-conversation, someone needs to find out without having
+to remember to go read Railway's log stream.
+
+- **Structured logging**: everything that used to be a bare `print()`
+  (e.g. `_deliver_to_customer`) now goes through Python's `logging`
+  module (see `observability.py`), so log lines carry a timestamp,
+  level, and logger name -- easier to grep in Railway's log viewer.
+- **Error handling**: `/webhook` wraps the actual message-processing
+  call in a `try/except`. An unexpected failure gets the full
+  traceback logged, is reported to Sentry (see below), and the
+  customer's request fails with a generic 500 instead of leaking
+  internals or crashing the process.
+- **Error reporting (Sentry)**: set `SENTRY_DSN` (from a free
+  sentry.io project -- its free tier is far more than this project's
+  message volume needs) to get notified when something actually
+  breaks in production, instead of finding out only if you happen to
+  check the logs. Optional and off by default; unset locally.
 
 ## Known limitations (see "Not in v1" in the scope doc)
 
@@ -288,9 +312,6 @@ What a real deployment needs, beyond connecting the GitHub repo:
   get no special handling.
 - No live Instagram integration yet — `/webhook` accepts a simulated
   payload, not Meta's real format, and replies are never actually
-  delivered (`_deliver_to_customer` just prints). Both are isolated,
+  delivered (`_deliver_to_customer` just logs). Both are isolated,
   small changes once the business's Meta access token arrives — see
   `web.py`.
-- Not deployed anywhere yet — the `Procfile` is prepared, but running it
-  on a real Railway project hasn't actually been done/verified. See
-  "Deploy (Railway)" above.

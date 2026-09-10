@@ -45,13 +45,18 @@ import html
 import os
 import secrets
 
+import sentry_sdk
 from fastapi import Depends, FastAPI, Form, HTTPException, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from . import observability
 from .runner import list_pending_reviews, resolve_pending_review, submit_customer_message
+
+observability.configure()
+logger = observability.logger
 
 app = FastAPI(title="Bella Charm London")
 
@@ -83,9 +88,9 @@ def _require_owner(credentials: HTTPBasicCredentials = Depends(_security)) -> No
 
 
 def _deliver_to_customer(customer_id: str, text: str) -> None:
-    """Stub: prints instead of actually sending, until a real Instagram
+    """Stub: logs instead of actually sending, until a real Instagram
     Send API call can replace this body."""
-    print(f"[WOULD SEND to {customer_id}]: {text}")
+    logger.info("Would send to %s: %s", customer_id, text)
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +117,19 @@ def _extract_incoming_message(payload: SimulatedDMPayload) -> tuple[str, str]:
 @app.post("/webhook")
 def webhook(payload: SimulatedDMPayload) -> dict:
     customer_id, text = _extract_incoming_message(payload)
-    result = submit_customer_message(customer_id, text)
+    try:
+        result = submit_customer_message(customer_id, text)
+    except Exception:
+        # A customer's message failed to process (e.g. Groq is down or
+        # times out) -- log the full traceback and report it to Sentry
+        # so this doesn't just sit unnoticed in Railway's log stream,
+        # then fail the request without leaking internals to the caller.
+        logger.exception("Failed to process message from %s", customer_id)
+        sentry_sdk.capture_exception()
+        raise HTTPException(
+            status_code=500,
+            detail="Something went wrong processing this message.",
+        )
     if result["status"] == "sent":
         _deliver_to_customer(customer_id, result["draft_reply"])
     return result

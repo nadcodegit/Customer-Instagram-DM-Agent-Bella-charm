@@ -237,3 +237,33 @@ def test_webhook_does_not_require_auth(monkeypatch, fake_llm):
     unauthenticated = TestClient(web.app)
     response = unauthenticated.post("/webhook", json={"customer_id": "auth_test_2", "text": "are you open?"})
     assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Error handling / observability
+# ---------------------------------------------------------------------------
+
+
+def test_webhook_reports_unexpected_error_gracefully(monkeypatch, caplog):
+    """If message processing blows up (e.g. Groq is unreachable), the
+    customer gets a generic 500 -- not a leaked traceback, not a hung
+    request -- and the failure is both logged and reported to Sentry so
+    it doesn't just sit unnoticed in Railway's log stream."""
+
+    def _boom(customer_id, text):
+        raise RuntimeError("Groq is down")
+
+    monkeypatch.setattr(web, "submit_customer_message", _boom)
+    reported = []
+    monkeypatch.setattr(web.sentry_sdk, "capture_exception", lambda: reported.append(True))
+
+    unauthenticated = TestClient(web.app)
+    with caplog.at_level("ERROR"):
+        response = unauthenticated.post(
+            "/webhook", json={"customer_id": "error_test", "text": "hi"}
+        )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Something went wrong processing this message."
+    assert reported == [True]  # Sentry was notified
+    assert "Failed to process message from error_test" in caplog.text
