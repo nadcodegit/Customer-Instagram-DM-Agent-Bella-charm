@@ -21,8 +21,8 @@ def test_cart_line_shows_a_design_detail_when_present():
 
 
 def test_cart_line_detail_and_multiplier_suffix_combine():
-    item = {"category": "Charm", "variant": "Claddagh", "price": 5, "quantity": 2, "tag": "gold"}
-    assert cart_line(item) == "- Claddagh Charm (gold) x2 (£10)"
+    item = {"category": "Charm", "variant": "Animal", "price": 5, "quantity": 2, "tag": "a husky"}
+    assert cart_line(item) == "- Animal Charm (a husky) x2 (£10)"
 
 
 def test_cart_total_sums_price_times_quantity_across_items():

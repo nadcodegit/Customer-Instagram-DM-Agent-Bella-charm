@@ -42,13 +42,23 @@ Show the top-level categories: **Charm / Bracelet / Watch / Accessories**
 Purple, Brown, Red
 
 **Charm** — subcategories: Flag, Zodiac, Heart, Animal, Birth Month,
-Letters, Claddagh. Price is flat £5 regardless of subcategory or the
-design captured in Step 5 below — real customer designs go deeper than
-the subcategory (e.g. a specific dog breed, "union jack", or gold vs.
-silver Claddagh) and number well beyond what any fixed list could cover,
-so the agent doesn't try to match an exact design against a catalog (out
-of scope for v1, see "Not in v1" below) — it just asks and passes along
-whatever the customer says.
+Letters. This list is intentionally closed, not something to keep
+growing every time a customer names something else (e.g. "Claddagh") —
+real-world charm variety is large enough that adding a fixed subcategory
+per request doesn't scale. A named charm type that isn't one of these
+six is genuinely out of scope, same as any other request outside this
+document: it goes to "other" (see "Everything else" below), not a new
+catalog entry.
+
+Price is flat £5 regardless of subcategory or the design captured in
+Step 5 below — real customer designs go deeper than the subcategory
+(e.g. a specific dog breed within Animal, or "union jack" within Flag)
+and number well beyond what any fixed list could cover, so the agent
+doesn't try to match an exact design against a catalog (out of scope for
+v1, see "Not in v1" below) — it just asks and passes along whatever the
+customer says. This is the mechanism for handling variety *within* one
+of the six subcategories; it's not a way to support charm types outside
+them.
 
 **Accessories** — 1 option: Key (the connector for adding charms onto a
 bracelet). Flat £5. Just one item for now, but modeled as a proper
@@ -62,12 +72,13 @@ this to your cart?"
 - No → discard the pending selection
 
 **Charm only**: bundled into the same question, also ask whether they
-have a specific design/color/pattern in mind (e.g. a particular animal,
-a Claddagh's metal, a birth month). Whatever they say (or "no
-preference") is passed along as-is to the owner, who confirms
-availability herself — the agent never validates it against a real
-catalog. Shown alongside the item everywhere it's summarized (cart
-summary, final order) so the owner actually sees it.
+have a specific design/color/pattern in mind within that subcategory
+(e.g. which animal, which zodiac sign, which birth month, a color or
+finish). Whatever they say (or "no preference") is passed along as-is
+to the owner, who confirms availability herself — the agent never
+validates it against a real catalog. Shown alongside the item
+everywhere it's summarized (cart summary, final order) so the owner
+actually sees it.
 
 Either way, continue to Step 6.
 

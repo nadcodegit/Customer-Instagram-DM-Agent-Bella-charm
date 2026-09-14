@@ -18,7 +18,7 @@ CATEGORY_VARIANTS = {
         "Gold", "Silver", "Copper", "Rose Gold", "Pink",
         "Black", "Purple", "Brown", "Red",
     ],
-    "Charm": ["Flag", "Zodiac", "Heart", "Animal", "Birth Month", "Letters", "Claddagh"],
+    "Charm": ["Flag", "Zodiac", "Heart", "Animal", "Birth Month", "Letters"],
     # Currently just the bracelet-connector "Key" -- a single-item category
     # for now, but kept as a proper category (not a special case) so more
     # accessories can be added later without any FSM changes.
