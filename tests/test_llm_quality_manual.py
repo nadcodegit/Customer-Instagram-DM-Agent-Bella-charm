@@ -172,6 +172,23 @@ def test_add_to_cart_decline_with_a_named_alternative_skips_back_to_confirm(make
     assert result["pending_selection"]["variant"] == "Zodiac"
 
 
+def test_variant_matcher_does_not_force_match_a_real_but_unlisted_design(make_state):
+    # Regression check from a real conversation: a customer named
+    # "Claddagh" -- a real, well-known charm design (not in our fixed six
+    # subcategories, see customer-conversation-scenarios.md on why it
+    # stays out) that traditionally features a heart motif. The model was
+    # force-matching it to "Heart" 5/5 times before this fix, which would
+    # have silently sold the customer the wrong item. A named, real
+    # product that isn't actually one of the options must not match just
+    # because it's visually/thematically associated with one.
+    charm_variants = graph.CATEGORY_VARIANTS["Charm"]
+    state = make_state("Claddagh")
+    match = graph._match_step_answer(
+        state, charm_variants, f"Which Charm would you like: {', '.join(charm_variants)}?"
+    )
+    assert match.matched_option is None
+
+
 def test_variant_matcher_recognizes_the_newer_charm_subcategories(make_state):
     # Flag/Heart/Animal were already covered above; Zodiac, Birth Month,
     # and Letters were added later based on the real product line and
