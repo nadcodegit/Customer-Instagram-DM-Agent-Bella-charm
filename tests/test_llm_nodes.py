@@ -147,6 +147,28 @@ def test_handle_add_to_cart_extracts_quantity_and_adds_it_once(make_state, monke
     assert result["current_step"] == "awaiting_more_items"
 
 
+def test_handle_add_to_cart_captures_a_named_design_detail(make_state, monkeypatch, fake_llm):
+    monkeypatch.setattr(
+        graph,
+        "_llm",
+        fake_llm(graph.AddToCartAnswer(matched=True, add_to_cart=True, detail="a dog")),
+    )
+    state = make_state(
+        "yes, a dog please", pending_selection={"category": "Charm", "variant": "Animal"}
+    )
+    result = graph._handle_add_to_cart(state)
+    assert result["cart"][0]["tag"] == "a dog"
+    assert "(a dog)" in result["draft_reply"]
+
+
+def test_handle_add_to_cart_no_detail_mentioned_leaves_tag_none(make_state, monkeypatch, fake_llm):
+    monkeypatch.setattr(graph, "_llm", fake_llm(graph.AddToCartAnswer(matched=True, add_to_cart=True)))
+    state = make_state("yes", pending_selection={"category": "Charm", "variant": "Heart"})
+    result = graph._handle_add_to_cart(state)
+    assert result["cart"][0]["tag"] is None
+    assert result["draft_reply"].startswith("Added to your cart! ")
+
+
 def test_handle_add_to_cart_declined_leaves_cart_empty(make_state, monkeypatch, fake_llm):
     monkeypatch.setattr(graph, "_llm", fake_llm(graph.AddToCartAnswer(matched=True, add_to_cart=False)))
     state = make_state("no thanks", pending_selection={"category": "Charm", "variant": "Heart"})

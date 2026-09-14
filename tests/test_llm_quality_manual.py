@@ -82,6 +82,17 @@ def test_new_request_classifier_recognizes_out_of_scope_requests(make_state):
     assert result["owner_followups"] == ["can you make me a custom engraved necklace?"]
 
 
+def test_add_to_cart_extracts_a_named_design_detail_for_claddagh(make_state):
+    # Regression check based on a real customer conversation: the owner
+    # asked "silver Claddagh or gold one?" and the customer answered with
+    # just the material -- that has to land in `tag`, not get silently
+    # dropped like quantity used to (see the more-items fix).
+    state = make_state("gold please", pending_selection={"category": "Charm", "variant": "Claddagh"})
+    result = graph._handle_add_to_cart(state)
+    assert result["cart"][0]["tag"] is not None
+    assert "gold" in result["cart"][0]["tag"].lower()
+
+
 def test_add_to_cart_extracts_a_mentioned_quantity(make_state):
     state = make_state(
         "yes, 2 hearts please", pending_selection={"category": "Charm", "variant": "Heart"}

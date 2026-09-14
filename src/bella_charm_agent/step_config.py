@@ -55,9 +55,25 @@ def _add_to_cart_question(state: ConversationState) -> str:
     # here so the confirmation isn't silently about a different count than
     # what's about to be added (see _handle_add_to_cart).
     quantity = state["pending_selection"].get("quantity") or 1
-    if quantity > 1:
-        return f"Want me to add {quantity}x {name} (£{price} each) to your cart?"
-    return f"Want me to add the {name} (£{price}) to your cart?"
+    confirm = (
+        f"Want me to add {quantity}x {name} (£{price} each) to your cart?"
+        if quantity > 1
+        else f"Want me to add the {name} (£{price}) to your cart?"
+    )
+
+    if category != "Charm":
+        return confirm
+
+    # A Charm variant (Flag, Animal, Zodiac, ...) is a broad bucket, not a
+    # single specific item -- there's no real per-design catalog to match
+    # against (see "Not in v1" in customer-conversation-scenarios.md), so
+    # this asks for whatever detail the customer has in mind and passes it
+    # along as-is rather than pretending to validate it.
+    return (
+        f"Any specific design, color, or pattern you'd like for the {variant} Charm? "
+        "I'll pass it along to the owner -- she'll get in touch if it's not in stock. "
+        f"{confirm}"
+    )
 
 
 def _final_confirm_question(state: ConversationState) -> str:

@@ -32,16 +32,26 @@ class CartItem(TypedDict):
     variant: str
     price: int  # per-unit price
     quantity: int
-    # Reserved for the future photo-tag / vector-search idea (see the
-    # "Not in v1" section of customer-conversation-scenarios.md).
-    # Always None for now -- nothing reads or sets this yet.
+    # A customer-specified design/color/pattern detail, freeform text --
+    # only ever set for Charm (see AddToCartAnswer.detail in graph.py),
+    # since a Charm subcategory like "Animal" or "Claddagh" is a broad
+    # bucket, not a specific item. None for every other category, and for
+    # Charm items where the customer had no particular preference. Also
+    # the natural home for the future photo-tag / vector-search idea (see
+    # "Not in v1" in customer-conversation-scenarios.md) if that's ever
+    # built -- this freeform text is a stopgap for the same need.
     tag: str | None
 
 
 def cart_line(item: CartItem) -> str:
     suffix = f" x{item['quantity']}" if item["quantity"] > 1 else ""
     singular = CATEGORY_SINGULAR[item["category"]]
-    return f"- {item['variant']} {singular}{suffix} (£{item['price'] * item['quantity']})"
+    # tag carries a customer-requested design/color/pattern detail (Charm
+    # only, see graph.py's AddToCartAnswer) -- it must show up here, since
+    # this is what the owner actually reads to fulfill the order, not just
+    # a field that's captured and never surfaced anywhere.
+    detail = f" ({item['tag']})" if item.get("tag") else ""
+    return f"- {item['variant']} {singular}{detail}{suffix} (£{item['price'] * item['quantity']})"
 
 
 def cart_total(cart: list[CartItem]) -> int:

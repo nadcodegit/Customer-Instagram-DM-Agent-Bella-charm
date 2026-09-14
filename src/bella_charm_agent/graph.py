@@ -590,6 +590,15 @@ class AddToCartAnswer(BaseModel):
             "spelled here (same list as the category prompt uses):\n"
         ),
     )
+    detail: str | None = Field(
+        default=None,
+        description=(
+            "Charm only: the specific design/color/pattern they asked for "
+            "(e.g. 'a dog', 'gold', 'the letter M'), if the question asked "
+            "about one and they named it. Null if they said they have no "
+            "preference, or the question didn't ask about this at all."
+        ),
+    )
 
 
 def _handle_add_to_cart(state: ConversationState) -> dict:
@@ -599,9 +608,12 @@ def _handle_add_to_cart(state: ConversationState) -> dict:
         f'A customer was just asked: "{question}"\n'
         f'Their reply: "{_last_message_text(state)}"\n\n'
         "Determine whether they want this item added to their cart, and "
-        "how many (default 1 if they didn't mention a number). If they "
-        "decline but name something else they'd rather have instead, "
-        "capture that too -- valid categories and variants:\n"
+        "how many (default 1 if they didn't mention a number). If the "
+        "question asked about a specific design/color/pattern (Charm "
+        "only) and they named one, capture it -- null if they said they "
+        "have no preference. If they decline but name something else "
+        "they'd rather have instead, capture that too -- valid categories "
+        "and variants:\n"
         f"{_variants_hint()}\n\n"
         "If their reply doesn't address adding-or-not at all, set matched "
         "to false."
@@ -630,11 +642,12 @@ def _handle_add_to_cart(state: ConversationState) -> dict:
                 "variant": variant,
                 "price": CATEGORY_PRICES[category],
                 "quantity": quantity,
-                "tag": None,
+                "tag": result.detail,
             }
         )
         qty_note = f" x{quantity}" if quantity > 1 else ""
-        reply_prefix = f"Added to your cart{qty_note}! "
+        detail_note = f" ({result.detail})" if result.detail else ""
+        reply_prefix = f"Added to your cart{detail_note}{qty_note}! "
 
     peek_state = {**state, "cart": cart}
     return {

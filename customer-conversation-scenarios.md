@@ -42,12 +42,13 @@ Show the top-level categories: **Charm / Bracelet / Watch / Accessories**
 Purple, Brown, Red
 
 **Charm** — subcategories: Flag, Zodiac, Heart, Animal, Birth Month,
-Letters. Picking the subcategory is the final selectable item (flat £5
-regardless of subcategory) — there is no further design-level choice,
-since individual charm designs within a subcategory can number 1000+ and
-don't affect price. (Real customer designs go deeper than this -- e.g. a
-specific dog breed, or "union jack" -- but matching an exact design is out
-of scope for v1; see "Not in v1" below.)
+Letters, Claddagh. Price is flat £5 regardless of subcategory or the
+design captured in Step 5 below — real customer designs go deeper than
+the subcategory (e.g. a specific dog breed, "union jack", or gold vs.
+silver Claddagh) and number well beyond what any fixed list could cover,
+so the agent doesn't try to match an exact design against a catalog (out
+of scope for v1, see "Not in v1" below) — it just asks and passes along
+whatever the customer says.
 
 **Accessories** — 1 option: Key (the connector for adding charms onto a
 bracelet). Flat £5. Just one item for now, but modeled as a proper
@@ -59,6 +60,14 @@ For whichever specific item the customer lands on, ask: "Want me to add
 this to your cart?"
 - Yes → add {category, variant, price} to the cart
 - No → discard the pending selection
+
+**Charm only**: bundled into the same question, also ask whether they
+have a specific design/color/pattern in mind (e.g. a particular animal,
+a Claddagh's metal, a birth month). Whatever they say (or "no
+preference") is passed along as-is to the owner, who confirms
+availability herself — the agent never validates it against a real
+catalog. Shown alongside the item everywhere it's summarized (cart
+summary, final order) so the owner actually sees it.
 
 Either way, continue to Step 6.
 

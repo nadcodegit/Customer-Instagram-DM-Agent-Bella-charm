@@ -58,6 +58,24 @@ def test_variant_preserves_a_quantity_named_earlier(make_state):
     assert "2x" in result["draft_reply"]
 
 
+def test_variant_add_to_cart_question_asks_for_charm_design_detail(make_state):
+    # A Charm subcategory (Animal, Claddagh, ...) is a broad bucket, not a
+    # specific item -- the confirm question should also ask what the
+    # customer actually wants, not just whether to add "the Animal Charm".
+    state = make_state(pending_selection={"category": "Charm"})
+    result = graph._t_variant(state, "Animal")
+    assert "specific design" in result["draft_reply"]
+    assert "Want me to add the Animal Charm (£5) to your cart?" in result["draft_reply"]
+
+
+def test_variant_add_to_cart_question_skips_design_detail_for_non_charm(make_state):
+    # A Bracelet color (or Watch model) is already the specific item --
+    # no extra design question needed.
+    state = make_state(pending_selection={"category": "Bracelet"})
+    result = graph._t_variant(state, "Gold")
+    assert result["draft_reply"] == "Want me to add the Gold Bracelet (£15) to your cart?"
+
+
 def test_more_items_yes_returns_to_category(make_state):
     result = graph._t_more_items(make_state(), "Yes")
     assert result["current_step"] == "awaiting_category"
