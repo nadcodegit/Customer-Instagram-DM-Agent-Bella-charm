@@ -116,6 +116,59 @@ def test_handle_step_answer_off_topic_but_actually_a_price_question_gets_answere
     assert "owner_followups" not in result
 
 
+def test_handle_step_answer_variant_mismatch_with_same_category_price_guess_escalates(
+    make_state, monkeypatch, fake_llm
+):
+    # Regression check for a real conversation: a customer named
+    # "Claddagh" answering "which Charm would you like?" -- not one of
+    # our six subcategories, so it doesn't match. Reclassification's best
+    # guess for the bare word "Claddagh" is a price question about Charm
+    # -- the *same* category already being discussed, so that's not new
+    # information, it's the fallback guess for a named product that
+    # isn't actually one of our variants. Should escalate, not silently
+    # repeat the price and loop.
+    monkeypatch.setattr(
+        graph,
+        "_match_step_answer",
+        lambda state, options, question: graph.StepAnswerMatch(matched_option=None),
+    )
+    monkeypatch.setattr(
+        graph, "_llm", fake_llm(graph.NewRequestClassification(intent="price_inquiry", category="Charm"))
+    )
+    state = make_state(
+        "Claddagh", current_step="awaiting_variant", pending_selection={"category": "Charm"}
+    )
+    result = graph.handle_step_answer(state)
+    assert result["owner_followups"] == ["Claddagh"]
+    assert "£5" not in result["draft_reply"]
+    assert "current_step" not in result
+
+
+def test_handle_step_answer_variant_mismatch_with_different_category_still_answers(
+    make_state, monkeypatch, fake_llm
+):
+    # Contrast with the above: naming a genuinely different category mid
+    # variant-selection ("what about bracelets?") is real new
+    # information, not a fallback guess about the category already being
+    # discussed -- should still get answered inline, not escalated.
+    monkeypatch.setattr(
+        graph,
+        "_match_step_answer",
+        lambda state, options, question: graph.StepAnswerMatch(matched_option=None),
+    )
+    monkeypatch.setattr(
+        graph,
+        "_llm",
+        fake_llm(graph.NewRequestClassification(intent="price_inquiry", category="Bracelet")),
+    )
+    state = make_state(
+        "what about bracelets?", current_step="awaiting_variant", pending_selection={"category": "Charm"}
+    )
+    result = graph.handle_step_answer(state)
+    assert "£15" in result["draft_reply"]
+    assert "owner_followups" not in result
+
+
 def test_handle_step_answer_off_topic_greeting_gets_a_friendly_reply_and_resumes(
     make_state, monkeypatch, fake_llm
 ):

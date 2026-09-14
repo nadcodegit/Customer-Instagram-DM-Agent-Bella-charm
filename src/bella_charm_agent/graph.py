@@ -219,7 +219,9 @@ def _match_step_answer(
     return result
 
 
-def _handle_off_topic_message(state: ConversationState, resume_question: str) -> dict:
+def _handle_off_topic_message(
+    state: ConversationState, resume_question: str, known_category: str | None = None
+) -> dict:
     """Called whenever a message doesn't answer the pending question.
 
     Before assuming it's out of scope, check whether it's actually a valid
@@ -231,12 +233,30 @@ def _handle_off_topic_message(state: ConversationState, resume_question: str) ->
     in-progress flow (cart, current_step, ...) changes -- we answer (or
     escalate) inline, then re-ask the original pending question so it
     picks back up exactly where it left off.
+
+    `known_category` is set only by the "awaiting_variant" dispatch (see
+    handle_step_answer): the pending question was "which variant of
+    {known_category}", and the reply didn't match any real variant for
+    it. If reclassification's best guess for that same reply is just a
+    price question about that *same* category, that's not new
+    information -- the price was already given earlier in this flow --
+    it's almost certainly the model defaulting to the closest-sounding
+    guess for a named product that isn't actually one of our variants
+    (a real customer asked for a "Claddagh" charm, which isn't in our
+    six subcategories, and this is what a naive reclassify did with it:
+    silently repeated "our charms are £5" instead of flagging that she'd
+    asked for something we don't carry). Treated as out of scope instead.
     """
     result = _classify_new_request(state)
+    same_category_price_guess = (
+        result.intent == "price_inquiry"
+        and known_category is not None
+        and result.category == known_category
+    )
 
     if result.intent == "store_hours":
         answer = f"{STORE_HOURS}\nAddress: {STORE_ADDRESS}"
-    elif result.intent == "price_inquiry":
+    elif result.intent == "price_inquiry" and not same_category_price_guess:
         answer = _price_answer(result.category)
     elif result.intent == "greeting":
         answer = GREETING_REPLY
@@ -776,7 +796,16 @@ def handle_step_answer(state: ConversationState) -> dict:
         question = config.question(state)
         match = _match_step_answer(state, options, question)
         if match.matched_option is None:
-            result = _handle_off_topic_message(state, question)
+            # Only "awaiting_variant" has a real, closed catalog list
+            # behind it -- pass the category along so a reply that fails
+            # to match one of its variants (e.g. "Claddagh") isn't
+            # silently re-answered as a fresh price question about that
+            # same category instead of being flagged (see the Claddagh
+            # incident in _handle_off_topic_message's docstring).
+            known_category = (
+                state["pending_selection"].get("category") if step == "awaiting_variant" else None
+            )
+            result = _handle_off_topic_message(state, question, known_category)
         else:
             result = _TRANSITIONS[step](state, match.matched_option)
 
