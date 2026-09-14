@@ -574,6 +574,39 @@ def test_handle_browse_offer_yes_with_nothing_known_asks_category(make_state, mo
     assert result["current_step"] == "awaiting_category"
 
 
+def test_handle_browse_offer_yes_with_category_and_quantity_stashes_quantity_for_later(
+    make_state, monkeypatch, fake_llm
+):
+    # "yes, 2 charms please" -- category known already, quantity named
+    # here for the first time. Should still land on variant selection
+    # (same as the plain "yes" case), just carrying the quantity along.
+    monkeypatch.setattr(
+        graph,
+        "_llm",
+        fake_llm(graph.BrowseOfferAnswer(matched=True, wants_to_browse=True, quantity=2)),
+    )
+    state = make_state("yes, 2 please", pending_selection={"category": "Charm"})
+    result = graph._handle_browse_offer(state)
+    assert result["current_step"] == "awaiting_variant"
+    assert result["pending_selection"] == {"category": "Charm", "quantity": 2}
+
+
+def test_handle_browse_offer_yes_with_quantity_but_no_category_stashes_it_for_later(
+    make_state, monkeypatch, fake_llm
+):
+    # "yes please, I want 2" -- no category known at all yet (a general
+    # opening like "how much are your things?"). The "2" still shouldn't
+    # be lost by the time a category is picked.
+    monkeypatch.setattr(
+        graph,
+        "_llm",
+        fake_llm(graph.BrowseOfferAnswer(matched=True, wants_to_browse=True, quantity=2)),
+    )
+    result = graph._handle_browse_offer(make_state("yes please, I want 2"))
+    assert result["current_step"] == "awaiting_category"
+    assert result["pending_selection"] == {"quantity": 2}
+
+
 def test_handle_browse_offer_no_ends_the_turn(make_state, monkeypatch, fake_llm):
     monkeypatch.setattr(
         graph, "_llm", fake_llm(graph.BrowseOfferAnswer(matched=True, wants_to_browse=False))

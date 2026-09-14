@@ -139,6 +139,18 @@ def test_more_items_extractor_picks_up_a_named_category_and_quantity(make_state)
     assert result["pending_selection"] == {"category": "Charm", "quantity": 2}
 
 
+def test_browse_offer_extractor_picks_up_a_quantity_with_no_category_yet(make_state):
+    # Regression check: "yes please, I want 2" at the browse-offer step,
+    # with no category known yet, used to lose the "2" entirely --
+    # BrowseOfferAnswer had no quantity field, and even if it had, the
+    # no-category branch (_t_browse_offer) didn't stash anything into
+    # pending_selection.
+    state = make_state("yes please, I want 2")
+    result = graph._handle_browse_offer(state)
+    assert result["current_step"] == "awaiting_category"
+    assert result["pending_selection"] == {"quantity": 2}
+
+
 def test_browse_offer_reuses_a_category_already_known_from_the_opening_message(make_state):
     # Regression check: a customer who opened with "how much is a charm?"
     # (category captured then) and later just says "yes" shouldn't be

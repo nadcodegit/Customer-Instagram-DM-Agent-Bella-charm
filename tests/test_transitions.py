@@ -33,6 +33,15 @@ def test_browse_offer_no_returns_to_start(make_state):
     assert result["current_step"] == "start"
 
 
+def test_browse_offer_yes_stashes_a_quantity_named_before_any_category(make_state):
+    # "yes please, I want 2" -- no category known yet, but the "2"
+    # shouldn't be lost by the time a category/variant follows (same
+    # pending_selection mechanism as _t_category/_t_variant).
+    result = graph._t_browse_offer(make_state(), "Yes", quantity=2)
+    assert result["current_step"] == "awaiting_category"
+    assert result["pending_selection"] == {"quantity": 2}
+
+
 def test_category_records_pending_selection_and_asks_variant(make_state):
     result = graph._t_category(make_state(), "Bracelet")
     assert result["pending_selection"] == {"category": "Bracelet"}

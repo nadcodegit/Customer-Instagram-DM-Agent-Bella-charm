@@ -244,11 +244,20 @@ def _handle_off_topic_message(state: ConversationState, resume_question: str) ->
     return {"draft_reply": f"{answer}\n\n{resume_question}"}
 
 
-def _t_browse_offer(state: ConversationState, answer: str) -> dict:
+def _t_browse_offer(state: ConversationState, answer: str, quantity: int | None = None) -> dict:
     if answer == "Yes":
+        # A quantity may already be known (e.g. "yes please, I want 2")
+        # even though no category has been picked yet -- stash it in
+        # pending_selection the same way _advance_with_category_and_variant
+        # does, so it isn't lost by the time a category/variant follows.
+        pending = {**state["pending_selection"]}
+        if quantity:
+            pending["quantity"] = quantity
+        peek_state = {**state, "pending_selection": pending}
         return {
+            "pending_selection": pending,
             "current_step": "awaiting_category",
-            "draft_reply": STEP_CONFIG["awaiting_category"].question(state),
+            "draft_reply": STEP_CONFIG["awaiting_category"].question(peek_state),
         }
     return {
         "current_step": "start",
@@ -262,7 +271,13 @@ class BrowseOfferAnswer(BaseModel):
     )
     wants_to_browse: bool = Field(
         default=False,
-        description="True if they want to see the options. Only meaningful when matched is true.",
+        description=(
+            "True if they want to see the options. Naming a specific "
+            "category or item they want counts as yes even without the "
+            "word 'yes' (e.g. 'I want 2 charms' -> true) -- asking for "
+            "something *is* the answer, not a separate question. Only "
+            "meaningful when matched is true."
+        ),
     )
     category: Literal["Bracelet", "Charm", "Watch", "Accessories"] | None = Field(
         default=None,
@@ -277,6 +292,15 @@ class BrowseOfferAnswer(BaseModel):
         description=(
             "If they also named one of that category's specific variants "
             "in the same message, capture it here too."
+        ),
+    )
+    quantity: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "If they also mentioned how many of that item they want (e.g. "
+            "'yes, 2 charms please'), capture it here. Null if no number "
+            "was mentioned -- do not default to 1."
         ),
     )
 
@@ -295,11 +319,16 @@ def _handle_browse_offer(state: ConversationState) -> dict:
     result: BrowseOfferAnswer = extractor.invoke(
         f'A customer was just asked: "{question}"\n'
         f'Their reply: "{_last_message_text(state)}"\n\n'
-        "Determine whether they want to see the options (yes/no). If they "
-        "also named a specific category (bracelet, charm, or watch), "
-        "and/or one of that category's specific variants, in the same "
-        "message, capture those too -- exactly as spelled here:\n"
+        "Determine whether they want to see the options (yes/no). Naming "
+        "a specific category or item they want counts as yes on its own "
+        "-- e.g. 'I want 2 charms' means wants_to_browse is true, not "
+        "just a category+quantity with no answer to the actual question. "
+        "If they also named a specific category (bracelet, charm, or "
+        "watch), and/or one of that category's specific variants, in the "
+        "same message, capture those too -- exactly as spelled here:\n"
         f"{_variants_hint()}\n\n"
+        "If they also mentioned how many they want (e.g. 'yes, 2 charms "
+        "please'), capture that too -- null if no number was mentioned.\n\n"
         "If their reply doesn't address this at all, set matched to false."
     )
 
@@ -310,8 +339,8 @@ def _handle_browse_offer(state: ConversationState) -> dict:
 
     category = result.category or state["pending_selection"].get("category")
     if category:
-        return _advance_with_category_and_variant(state, category, result.variant)
-    return _t_browse_offer(state, "Yes")
+        return _advance_with_category_and_variant(state, category, result.variant, result.quantity)
+    return _t_browse_offer(state, "Yes", result.quantity)
 
 
 def _t_category(state: ConversationState, answer: str) -> dict:
@@ -356,8 +385,14 @@ def _advance_with_category_and_variant(
     pending_selection the same way category/variant are -- it rides along
     through _t_category/_t_variant so a customer who says "2 charms please"
     doesn't get asked to re-specify the count once they reach the
-    add-to-cart confirmation (see _handle_add_to_cart).
+    add-to-cart confirmation (see _handle_add_to_cart). Falls back to a
+    quantity already sitting in pending_selection (e.g. named back at the
+    browse-offer step) when this call site doesn't extract a fresh one
+    itself -- otherwise a caller like _handle_category, which has no
+    quantity of its own to pass, would silently wipe out one a customer
+    already gave a step earlier.
     """
+    quantity = quantity or state["pending_selection"].get("quantity")
     pending: dict = {"category": category}
     if quantity:
         pending["quantity"] = quantity
@@ -607,9 +642,13 @@ def _handle_add_to_cart(state: ConversationState) -> dict:
     result: AddToCartAnswer = extractor.invoke(
         f'A customer was just asked: "{question}"\n'
         f'Their reply: "{_last_message_text(state)}"\n\n'
-        "Determine whether they want this item added to their cart, and "
-        "how many (default 1 if they didn't mention a number). If the "
-        "question asked about a specific design/color/pattern (Charm "
+        "Determine whether they want this item added to their cart. If a "
+        "number of items is mentioned *in this reply*, capture it as "
+        "quantity -- leave quantity null if this reply doesn't mention a "
+        "number itself, even if the question above already stated a "
+        "quantity (e.g. '2x Heart Charm'); a plain 'yes' is not restating "
+        "that number. If the question asked about a specific "
+        "design/color/pattern (Charm "
         "only) and they named one, capture it -- null if they said they "
         "have no preference. If they decline but name something else "
         "they'd rather have instead, capture that too -- valid categories "
