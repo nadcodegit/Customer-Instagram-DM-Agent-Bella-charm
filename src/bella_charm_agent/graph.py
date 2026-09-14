@@ -610,28 +610,34 @@ class AddToCartAnswer(BaseModel):
     alternative_category: Literal["Bracelet", "Charm", "Watch", "Accessories"] | None = Field(
         default=None,
         description=(
-            "Only when declining (add_to_cart is false): if they named a "
+            "Only when declining -- add_to_cart is false: if they named a "
             "different category they want instead (e.g. 'no, I want rose "
-            "charm' -> Charm), capture it here. Null if they didn't ask "
-            "for anything else, or if it's the same category as the item "
-            "just offered."
+            "charm' -> Charm), capture it here. Always null when "
+            "add_to_cart is true, even if they also named a color/animal/"
+            "pattern -- that's `detail` below, this field is only for "
+            "switching to a *different catalog category* while declining."
         ),
     )
     alternative_variant: str | None = Field(
         default=None,
         description=(
-            "Only when declining: if they also named a specific variant "
-            "within that category, capture it here too -- exactly as "
-            "spelled here (same list as the category prompt uses):\n"
+            "Only when declining -- add_to_cart is false: if they also "
+            "named a specific variant within that category, capture it "
+            "here too -- exactly as spelled here (same list as the "
+            "category prompt uses):\n"
         ),
     )
     detail: str | None = Field(
         default=None,
         description=(
-            "Charm only: the specific design/color/pattern they asked for "
-            "(e.g. 'a dog', 'gold', 'the letter M'), if the question asked "
-            "about one and they named it. Null if they said they have no "
-            "preference, or the question didn't ask about this at all."
+            "Charm only, and only when add_to_cart is true: the specific "
+            "design/color/pattern/animal/etc. they asked for (e.g. 'a "
+            "husky', 'gold', 'the letter M'), if the question asked about "
+            "one and they named it -- this is where that goes, NOT "
+            "alternative_variant (which is only for declining and picking "
+            "a different catalog item entirely). Null if they said they "
+            "have no preference, or the question didn't ask about this at "
+            "all."
         ),
     )
 
@@ -648,10 +654,12 @@ def _handle_add_to_cart(state: ConversationState) -> dict:
         "number itself, even if the question above already stated a "
         "quantity (e.g. '2x Heart Charm'); a plain 'yes' is not restating "
         "that number. If the question asked about a specific "
-        "design/color/pattern (Charm "
-        "only) and they named one, capture it -- null if they said they "
-        "have no preference. If they decline but name something else "
-        "they'd rather have instead, capture that too -- valid categories "
+        "design/color/pattern and they named one WHILE ACCEPTING the "
+        "item (add_to_cart true), that's `detail` -- null if they said "
+        "they have no preference or the question didn't ask about this "
+        "at all. Only if they're DECLINING (add_to_cart false) and name "
+        "something else they'd rather have instead, capture that as "
+        "alternative_category/alternative_variant -- valid categories "
         "and variants:\n"
         f"{_variants_hint()}\n\n"
         "If their reply doesn't address adding-or-not at all, set matched "
