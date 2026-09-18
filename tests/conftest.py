@@ -27,6 +27,14 @@ load_dotenv()
 os.environ["DASHBOARD_USERNAME"] = "test"
 os.environ["DASHBOARD_PASSWORD"] = "test"
 
+# Same reasoning, opposite direction: these three are meant to be unset in
+# most tests (real Instagram delivery/verification is opt-in, exercised by
+# tests that explicitly monkeypatch them), so a developer's local .env
+# having real values must not leak into the rest of the suite and silently
+# start making real HTTP calls to Instagram's API.
+for _meta_var in ("META_ACCESS_TOKEN", "META_IG_USER_ID", "META_VERIFY_TOKEN"):
+    os.environ.pop(_meta_var, None)
+
 
 class _FakeStructuredOutput:
     def __init__(self, response):

@@ -52,6 +52,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "langchain-groq" },
     { name = "langgraph" },
     { name = "langgraph-checkpoint-sqlite" },
@@ -64,14 +65,13 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "pytest" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.141.1" },
-    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28.1" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "langchain-groq", specifier = ">=0.2.0" },
     { name = "langgraph", specifier = ">=0.2.0" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=3.1.1" },

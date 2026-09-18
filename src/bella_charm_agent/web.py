@@ -6,12 +6,16 @@ Run with:
 
 --- Webhook (incoming DMs) ---
 
-`/webhook` accepts a simulated payload -- Meta's real Instagram webhook
-JSON isn't wired up yet (blocked on the business's Meta access token, not
-on anything here). `_extract_incoming_message` is the *only* place that
-understands the incoming payload's shape; swapping in the real Meta
-format later means changing that one function (and the Pydantic model
-above it), not the route, not runner.py, not graph.py.
+`GET /webhook` handles Meta's verification handshake (done once, when
+the Callback URL is saved in the Meta dashboard); `POST /webhook` is
+what Meta calls on every incoming event afterwards.
+`_extract_incoming_message` is the *only* place that understands the
+incoming payload's shape -- it accepts both Meta's real Instagram
+messaging format and the simulated {"customer_id", "text"} payload
+still used for local testing (runner.py's CLI, POST /webhook directly,
+the test suite). Swapping/extending the real format later means
+changing that one function, not the route, not runner.py, not
+graph.py.
 
 --- Review dashboard ---
 
@@ -24,10 +28,11 @@ message stays a developer-only tool (see runner.py's CLI, or POST
 
 --- Delivering the final reply ---
 
-Also blocked on the same Meta access token: `_deliver_to_customer` is
-the one place a real Instagram Send API call will go once it's
-available. Everything upstream already treats "sent"/"approved" as
-final, so nothing else will need to change when that arrives.
+`_deliver_to_customer` calls Instagram's Send API for real when
+META_ACCESS_TOKEN and META_IG_USER_ID are set; falls back to logging
+only (the old stub behavior) otherwise, so local dev/tests still work
+without real Meta credentials. Everything upstream already treats
+"sent"/"approved" as final, so nothing else needed to change here.
 
 --- Auth ---
 
@@ -35,22 +40,23 @@ The dashboard carries bank details and customer messages, so it's
 gated behind HTTP Basic Auth (DASHBOARD_USERNAME / DASHBOARD_PASSWORD,
 required -- this module refuses to import without them set, so it's
 never possible to accidentally deploy it unprotected). `/webhook` is
-deliberately left unauthenticated: it's meant to be called by Meta, not
-a browser, and HTTP Basic Auth isn't how Meta authenticates a webhook
-anyway (that's a verify token at subscription time plus a signature
-header on each request -- both arrive with the real webhook format).
+deliberately left unauthenticated: Meta doesn't authenticate a webhook
+with HTTP Basic Auth -- that's the verify token at subscription time
+(GET /webhook) plus, going forward, a per-request signature header this
+module doesn't check yet (see README's known limitations).
 """
 
 import html
 import os
 import secrets
 
+import httpx
 import sentry_sdk
-from fastapi import Depends, FastAPI, Form, HTTPException, status
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 
 from . import observability
 from .runner import list_pending_reviews, resolve_pending_review, submit_customer_message
@@ -71,6 +77,14 @@ if not _DASHBOARD_USERNAME or not _DASHBOARD_PASSWORD:
         "platform's secrets panel for a real deployment."
     )
 
+# All three optional -- unset locally, where real Instagram delivery/
+# verification isn't needed (or possible). A real deployment sets all
+# three once the business's Meta app has a token (see OWNER_GUIDE.md /
+# README for where each of these comes from).
+_META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN")
+_META_IG_USER_ID = os.environ.get("META_IG_USER_ID")
+_META_VERIFY_TOKEN = os.environ.get("META_VERIFY_TOKEN")
+
 _security = HTTPBasic()
 
 
@@ -88,9 +102,28 @@ def _require_owner(credentials: HTTPBasicCredentials = Depends(_security)) -> No
 
 
 def _deliver_to_customer(customer_id: str, text: str) -> None:
-    """Stub: logs instead of actually sending, until a real Instagram
-    Send API call can replace this body."""
-    logger.info("Would send to %s: %s", customer_id, text)
+    """Real Instagram Send API call when credentials are configured;
+    otherwise the old log-only stub, so local dev/tests never need
+    real Meta credentials just to exercise the rest of the flow."""
+    if not (_META_ACCESS_TOKEN and _META_IG_USER_ID):
+        logger.info("Would send to %s: %s", customer_id, text)
+        return
+
+    try:
+        response = httpx.post(
+            f"https://graph.instagram.com/v25.0/{_META_IG_USER_ID}/messages",
+            headers={"Authorization": f"Bearer {_META_ACCESS_TOKEN}"},
+            json={"recipient": {"id": customer_id}, "message": {"text": text}},
+            timeout=10,
+        )
+        response.raise_for_status()
+    except Exception:
+        # The graph/state already treat this reply as sent by this
+        # point -- delivery failing here means the customer never
+        # actually got it, so this must never pass silently even
+        # though (see below) it also must not fail the webhook request.
+        logger.exception("Failed to deliver Instagram message to %s", customer_id)
+        sentry_sdk.capture_exception()
 
 
 # ---------------------------------------------------------------------------
@@ -107,16 +140,65 @@ class SimulatedDMPayload(BaseModel):
     text: str
 
 
-def _extract_incoming_message(payload: SimulatedDMPayload) -> tuple[str, str]:
-    """(customer_id, message_text) from the incoming payload. The one
-    function that needs to change when the real Meta webhook format
-    replaces this simulated one."""
-    return payload.customer_id, payload.text
+def _extract_incoming_message(payload: dict) -> tuple[str, str] | None:
+    """(customer_id, message_text) from the incoming payload, or None if
+    there's nothing worth processing.
+
+    Understands two shapes:
+    - Meta's real Instagram messaging webhook (`{"object": "instagram",
+      "entry": [{"messaging": [...]}]}`). The same webhook also delivers
+      events this function must ignore rather than mistake for a
+      customer message: echoes of our *own* sent replies (`is_echo`,
+      since Meta reflects those back for multi-surface consistency --
+      treating one as incoming would feed the bot's own bank-details
+      reply back into itself), and non-message events (reactions, read
+      receipts, postbacks) that have no `message.text` at all.
+    - The simulated {"customer_id", "text"} payload used for local
+      testing (runner.py's CLI, POST /webhook directly, the test
+      suite).
+    """
+    if payload.get("object") == "instagram":
+        try:
+            messaging = payload["entry"][0]["messaging"][0]
+        except (KeyError, IndexError):
+            return None
+        message = messaging.get("message", {})
+        if message.get("is_echo") or "text" not in message:
+            return None
+        return messaging["sender"]["id"], message["text"]
+
+    simulated = SimulatedDMPayload.model_validate(payload)
+    return simulated.customer_id, simulated.text
+
+
+@app.get("/webhook", response_class=PlainTextResponse)
+def verify_webhook(request: Request) -> str:
+    """Meta's one-time verification handshake, sent when the Callback
+    URL + Verify token are saved in the app's webhook settings. Must
+    echo back hub.challenge verbatim; anything else and Meta refuses
+    to save the subscription."""
+    params = request.query_params
+    token_ok = _META_VERIFY_TOKEN and secrets.compare_digest(
+        params.get("hub.verify_token", ""), _META_VERIFY_TOKEN
+    )
+    if params.get("hub.mode") == "subscribe" and token_ok:
+        return params.get("hub.challenge", "")
+    raise HTTPException(status_code=403, detail="Webhook verification failed")
 
 
 @app.post("/webhook")
-def webhook(payload: SimulatedDMPayload) -> dict:
-    customer_id, text = _extract_incoming_message(payload)
+def webhook(payload: dict) -> dict:
+    try:
+        extracted = _extract_incoming_message(payload)
+    except Exception:
+        logger.exception("Failed to parse incoming webhook payload: %r", payload)
+        sentry_sdk.capture_exception()
+        raise HTTPException(status_code=400, detail="Unrecognized webhook payload.")
+
+    if extracted is None:
+        return {"status": "ignored"}
+    customer_id, text = extracted
+
     try:
         result = submit_customer_message(customer_id, text)
     except Exception:

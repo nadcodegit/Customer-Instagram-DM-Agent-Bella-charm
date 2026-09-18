@@ -197,6 +197,161 @@ def test_webhook_can_originate_a_fresh_pending_review_and_it_reaches_the_dashboa
     assert "Sort Code: 000000" in dashboard_html
 
 
+def test_webhook_accepts_a_real_meta_message_payload(client, monkeypatch, fake_llm):
+    monkeypatch.setattr(graph, "_llm", fake_llm(graph.NewRequestClassification(intent="store_hours")))
+    delivered = []
+    monkeypatch.setattr(web, "_deliver_to_customer", lambda cid, text: delivered.append((cid, text)))
+
+    real_payload = {
+        "object": "instagram",
+        "entry": [
+            {
+                "id": "17841400000000000",
+                "time": 1234567890,
+                "messaging": [
+                    {
+                        "sender": {"id": "real_meta_sender_1"},
+                        "recipient": {"id": "17841400000000000"},
+                        "timestamp": 1234567890,
+                        "message": {"mid": "mid.123", "text": "are you open?"},
+                    }
+                ],
+            }
+        ],
+    }
+    response = client.post("/webhook", json=real_payload)
+    assert response.status_code == 200
+    assert response.json()["status"] == "sent"
+    assert delivered == [("real_meta_sender_1", response.json()["draft_reply"])]
+
+
+def test_webhook_ignores_an_echo_of_our_own_sent_message(client, monkeypatch, fake_llm):
+    # Meta reflects our own outgoing replies back through the same
+    # webhook (is_echo) -- feeding that back into submit_customer_message
+    # would make the bot reply to itself.
+    monkeypatch.setattr(graph, "_llm", fake_llm(graph.NewRequestClassification(intent="store_hours")))
+    echo_payload = {
+        "object": "instagram",
+        "entry": [
+            {
+                "id": "17841400000000000",
+                "messaging": [
+                    {
+                        "sender": {"id": "17841400000000000"},
+                        "recipient": {"id": "real_meta_sender_1"},
+                        "message": {"mid": "mid.124", "text": "Open daily, 9:00 - 18:00", "is_echo": True},
+                    }
+                ],
+            }
+        ],
+    }
+    response = client.post("/webhook", json=echo_payload)
+    assert response.status_code == 200
+    assert response.json() == {"status": "ignored"}
+
+
+def test_webhook_ignores_a_non_message_event(client):
+    # A reaction, read receipt, or postback has no message.text at all --
+    # must not crash trying to process it as a customer message.
+    non_message_payload = {
+        "object": "instagram",
+        "entry": [
+            {
+                "id": "17841400000000000",
+                "messaging": [{"sender": {"id": "real_meta_sender_1"}, "read": {"mid": "mid.100"}}],
+            }
+        ],
+    }
+    response = client.post("/webhook", json=non_message_payload)
+    assert response.status_code == 200
+    assert response.json() == {"status": "ignored"}
+
+
+def test_webhook_malformed_real_shaped_payload_is_ignored_not_a_crash(client):
+    response = client.post("/webhook", json={"object": "instagram", "entry": []})
+    assert response.status_code == 200
+    assert response.json() == {"status": "ignored"}
+
+
+def test_webhook_verification_handshake_echoes_challenge_with_correct_token(monkeypatch):
+    monkeypatch.setattr(web, "_META_VERIFY_TOKEN", "correct-token")
+    unauthenticated = TestClient(web.app)
+    response = unauthenticated.get(
+        "/webhook", params={"hub.mode": "subscribe", "hub.verify_token": "correct-token", "hub.challenge": "12345"}
+    )
+    assert response.status_code == 200
+    assert response.text == "12345"
+
+
+def test_webhook_verification_handshake_rejects_wrong_token(monkeypatch):
+    monkeypatch.setattr(web, "_META_VERIFY_TOKEN", "correct-token")
+    unauthenticated = TestClient(web.app)
+    response = unauthenticated.get(
+        "/webhook", params={"hub.mode": "subscribe", "hub.verify_token": "wrong-token", "hub.challenge": "12345"}
+    )
+    assert response.status_code == 403
+
+
+def test_webhook_verification_handshake_rejects_when_no_verify_token_configured():
+    # _META_VERIFY_TOKEN unset (see conftest.py) -- must fail closed, not
+    # accept any token when none has been configured.
+    unauthenticated = TestClient(web.app)
+    response = unauthenticated.get(
+        "/webhook", params={"hub.mode": "subscribe", "hub.verify_token": "anything", "hub.challenge": "12345"}
+    )
+    assert response.status_code == 403
+
+
+def test_deliver_to_customer_calls_the_real_send_api_when_configured(monkeypatch):
+    monkeypatch.setattr(web, "_META_ACCESS_TOKEN", "test-access-token")
+    monkeypatch.setattr(web, "_META_IG_USER_ID", "17841400000000000")
+    calls = []
+
+    class _FakeResponse:
+        def raise_for_status(self):
+            pass
+
+    def _fake_post(url, headers, json, timeout):
+        calls.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+        return _FakeResponse()
+
+    monkeypatch.setattr(web.httpx, "post", _fake_post)
+    web._deliver_to_customer("real_meta_sender_1", "Open daily, 9:00 - 18:00")
+
+    assert len(calls) == 1
+    assert calls[0]["url"] == "https://graph.instagram.com/v25.0/17841400000000000/messages"
+    assert calls[0]["headers"] == {"Authorization": "Bearer test-access-token"}
+    assert calls[0]["json"] == {
+        "recipient": {"id": "real_meta_sender_1"},
+        "message": {"text": "Open daily, 9:00 - 18:00"},
+    }
+
+
+def test_deliver_to_customer_falls_back_to_logging_when_unconfigured(monkeypatch, caplog):
+    # _META_ACCESS_TOKEN / _META_IG_USER_ID unset (see conftest.py).
+    calls = []
+    monkeypatch.setattr(web.httpx, "post", lambda *a, **k: calls.append(1))
+    with caplog.at_level("INFO"):
+        web._deliver_to_customer("real_meta_sender_1", "hello")
+    assert calls == []  # never made a real HTTP call
+    assert "Would send to real_meta_sender_1: hello" in caplog.text
+
+
+def test_deliver_to_customer_reports_but_does_not_raise_on_send_failure(monkeypatch):
+    monkeypatch.setattr(web, "_META_ACCESS_TOKEN", "test-access-token")
+    monkeypatch.setattr(web, "_META_IG_USER_ID", "17841400000000000")
+
+    def _fake_post(*args, **kwargs):
+        raise RuntimeError("Instagram API is down")
+
+    monkeypatch.setattr(web.httpx, "post", _fake_post)
+    reported = []
+    monkeypatch.setattr(web.sentry_sdk, "capture_exception", lambda: reported.append(True))
+
+    web._deliver_to_customer("real_meta_sender_1", "hello")  # must not raise
+    assert reported == [True]
+
+
 # ---------------------------------------------------------------------------
 # Auth -- the dashboard requires it, /webhook deliberately doesn't (Meta
 # doesn't authenticate a webhook with HTTP Basic Auth anyway)

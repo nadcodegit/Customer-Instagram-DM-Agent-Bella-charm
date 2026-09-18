@@ -55,12 +55,15 @@ won't see those, they're already sent.
 
 ## What isn't live yet
 
-This is not yet connected to your real Instagram DMs — that's waiting
-on an access token from Meta, which is a separate step on your end.
-Until that's connected, nothing here is reaching real customers
-automatically; the whole flow has only been tested with simulated
-messages. Once it's connected, this same dashboard and these same
-three buttons are what you'll use for real.
+The Instagram connection is set up (the access token from Meta is in
+place), but it's not yet receiving real DMs — that needs one more
+step: Meta has to approve the app before it can read messages from
+customers who aren't already added as a "tester" account. Until then,
+nothing here is reaching real customers automatically; the whole flow
+has only been tested with simulated messages and the tester account.
+Once Meta approves it, this same dashboard and these same three
+buttons are what you'll use for real — nothing about how you use it
+changes.
 
 ## If something looks wrong
 

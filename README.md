@@ -206,13 +206,17 @@ uv run uvicorn bella_charm_agent.web:app --reload
 This is the single process meant to actually be deployed -- everything
 lives in one FastAPI app (`web.py`):
 
-- `POST /webhook` -- where an incoming DM arrives. For now it accepts a
-  **simulated** payload (`{"customer_id": "...", "text": "..."}`), not
-  Meta's real Instagram webhook format -- that's blocked on the
-  business's Meta access token, not on anything here.
-  `_extract_incoming_message` is the one function that knows the
-  payload's shape, so swapping in the real format later means changing
-  that function (and the Pydantic model above it), not the route, not
+- `GET /webhook` -- Meta's one-time verification handshake when the
+  Callback URL + Verify token are saved in the app's webhook settings;
+  echoes back `hub.challenge` after checking `hub.verify_token` against
+  `META_VERIFY_TOKEN`.
+- `POST /webhook` -- where an incoming DM arrives. Accepts both Meta's
+  real Instagram messaging payload and a **simulated** one
+  (`{"customer_id": "...", "text": "..."}`) still used for local
+  dev/tests -- `_extract_incoming_message` is the one function that
+  knows either shape (including ignoring echoes of our own sent
+  replies and non-message events like reactions/read receipts), so
+  extending it later means changing that function, not the route, not
   `runner.py`, not `graph.py`.
 - `GET /` -- the review dashboard. Lists every conversation currently
   paused for review (reads the same `data/conversations.sqlite` the CLI
@@ -232,9 +236,10 @@ curl -X POST http://localhost:8000/webhook \
   -d '{"customer_id": "test_customer", "text": "how much is a charm?"}'
 ```
 
-Delivering the final reply (auto-sent or approved) is also a stub for
-now -- `_deliver_to_customer` just logs, until a real Instagram Send
-API call can replace it once the access token arrives.
+Delivering the final reply (auto-sent or approved) calls Instagram's
+real Send API when `META_ACCESS_TOKEN` and `META_IG_USER_ID` are set;
+otherwise `_deliver_to_customer` just logs, so local dev/tests never
+need real Meta credentials.
 
 The dashboard (`GET /` and `POST /resolve/{customer_id}`) is gated
 behind HTTP Basic Auth -- it carries bank details and customer messages.
@@ -278,6 +283,11 @@ What a real deployment needs, beyond connecting the GitHub repo:
   `config/payment_secrets.json` exists on the server), and
   `BELLA_AGENT_DB_PATH` (see the next point). `BELLA_AGENT_MODEL` and
   `SENTRY_DSN` are optional, same as local (see "Observability" below).
+  `META_ACCESS_TOKEN`, `META_IG_USER_ID`, and `META_VERIFY_TOKEN` are
+  also optional -- unset, `/webhook` still works with the simulated
+  payload and replies just log instead of sending; set all three
+  together once the Meta app has a token (see `.env.example` for where
+  each comes from in the Meta dashboard).
 - **A persistent volume**, mounted at some path (e.g. `/data`), with
   `BELLA_AGENT_DB_PATH` pointing inside it (e.g.
   `/data/conversations.sqlite`). Without this, Railway's filesystem
@@ -314,8 +324,14 @@ to remember to go read Railway's log stream.
   subcategory. Asking about one gets a generic answer, not a real yes/no.
 - No image understanding: customers who send photos (common in practice)
   get no special handling.
-- No live Instagram integration yet — `/webhook` accepts a simulated
-  payload, not Meta's real format, and replies are never actually
-  delivered (`_deliver_to_customer` just logs). Both are isolated,
-  small changes once the business's Meta access token arrives — see
-  `web.py`.
+- Real Instagram wiring exists (`GET /webhook` verification, real
+  payload parsing, and `_deliver_to_customer`'s Send API call) but
+  isn't live yet: the Meta app's Callback URL/webhook subscription
+  hasn't been configured, and the app itself needs Meta's App Review
+  before it can receive DMs from anyone other than an added Instagram
+  Tester. See `web.py` and `.env.example`.
+- No signature verification on incoming webhook requests yet (Meta
+  signs each `POST /webhook` body; this doesn't check it) -- fine
+  while the endpoint is only reachable via a Tester account during
+  development, but worth adding before relying on `/webhook` being
+  unauthenticated once the app is published.
