@@ -77,13 +77,21 @@ if not _DASHBOARD_USERNAME or not _DASHBOARD_PASSWORD:
         "platform's secrets panel for a real deployment."
     )
 
-# All three optional -- unset locally, where real Instagram delivery/
-# verification isn't needed (or possible). A real deployment sets all
-# three once the business's Meta app has a token (see OWNER_GUIDE.md /
-# README for where each of these comes from).
+# All optional -- unset locally, where real Instagram delivery/
+# verification isn't needed (or possible). A real deployment sets the
+# three credentials once the business's Meta app has a token (see
+# OWNER_GUIDE.md / README for where each of these comes from).
 _META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN")
 _META_IG_USER_ID = os.environ.get("META_IG_USER_ID")
 _META_VERIFY_TOKEN = os.environ.get("META_VERIFY_TOKEN")
+
+# Separate from the credentials above on purpose: while testing the
+# webhook end to end (real DMs coming in, real graph processing), we
+# still don't want a real reply going out to a real customer. Rather
+# than add/remove META_ACCESS_TOKEN each time, this one flag gates
+# actually sending -- credentials can stay configured permanently, and
+# this is the single switch for "is this safe to go live yet."
+_META_SEND_ENABLED = os.environ.get("META_SEND_ENABLED", "").lower() == "true"
 
 _security = HTTPBasic()
 
@@ -102,10 +110,12 @@ def _require_owner(credentials: HTTPBasicCredentials = Depends(_security)) -> No
 
 
 def _deliver_to_customer(customer_id: str, text: str) -> None:
-    """Real Instagram Send API call when credentials are configured;
-    otherwise the old log-only stub, so local dev/tests never need
-    real Meta credentials just to exercise the rest of the flow."""
-    if not (_META_ACCESS_TOKEN and _META_IG_USER_ID):
+    """Real Instagram Send API call when credentials are configured
+    *and* META_SEND_ENABLED is explicitly on; otherwise the old
+    log-only stub, so local dev/tests -- and a real deployment still
+    being tested end to end -- never risk actually messaging a real
+    customer."""
+    if not (_META_SEND_ENABLED and _META_ACCESS_TOKEN and _META_IG_USER_ID):
         logger.info("Would send to %s: %s", customer_id, text)
         return
 

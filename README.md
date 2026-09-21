@@ -237,9 +237,13 @@ curl -X POST http://localhost:8000/webhook \
 ```
 
 Delivering the final reply (auto-sent or approved) calls Instagram's
-real Send API when `META_ACCESS_TOKEN` and `META_IG_USER_ID` are set;
-otherwise `_deliver_to_customer` just logs, so local dev/tests never
-need real Meta credentials.
+real Send API only when `META_ACCESS_TOKEN`, `META_IG_USER_ID`, *and*
+`META_SEND_ENABLED=true` are all set; otherwise `_deliver_to_customer`
+just logs. That last flag is deliberately separate from the
+credentials -- it means the webhook can be tested end to end against
+real Instagram DMs (receiving, full graph processing) with the
+credentials configured permanently, without a real reply ever risking
+going out to a real customer until it's explicitly flipped on.
 
 The dashboard (`GET /` and `POST /resolve/{customer_id}`) is gated
 behind HTTP Basic Auth -- it carries bank details and customer messages.
@@ -287,7 +291,9 @@ What a real deployment needs, beyond connecting the GitHub repo:
   also optional -- unset, `/webhook` still works with the simulated
   payload and replies just log instead of sending; set all three
   together once the Meta app has a token (see `.env.example` for where
-  each comes from in the Meta dashboard).
+  each comes from in the Meta dashboard). `META_SEND_ENABLED` stays
+  `false`/unset until real replies should actually go out -- see
+  "Deliver the final reply" above.
 - **A persistent volume**, mounted at some path (e.g. `/data`), with
   `BELLA_AGENT_DB_PATH` pointing inside it (e.g.
   `/data/conversations.sqlite`). Without this, Railway's filesystem

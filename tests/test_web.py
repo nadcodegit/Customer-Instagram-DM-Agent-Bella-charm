@@ -305,6 +305,7 @@ def test_webhook_verification_handshake_rejects_when_no_verify_token_configured(
 def test_deliver_to_customer_calls_the_real_send_api_when_configured(monkeypatch):
     monkeypatch.setattr(web, "_META_ACCESS_TOKEN", "test-access-token")
     monkeypatch.setattr(web, "_META_IG_USER_ID", "17841400000000000")
+    monkeypatch.setattr(web, "_META_SEND_ENABLED", True)
     calls = []
 
     class _FakeResponse:
@@ -328,7 +329,8 @@ def test_deliver_to_customer_calls_the_real_send_api_when_configured(monkeypatch
 
 
 def test_deliver_to_customer_falls_back_to_logging_when_unconfigured(monkeypatch, caplog):
-    # _META_ACCESS_TOKEN / _META_IG_USER_ID unset (see conftest.py).
+    # _META_ACCESS_TOKEN / _META_IG_USER_ID / _META_SEND_ENABLED all
+    # unset (see conftest.py).
     calls = []
     monkeypatch.setattr(web.httpx, "post", lambda *a, **k: calls.append(1))
     with caplog.at_level("INFO"):
@@ -337,9 +339,26 @@ def test_deliver_to_customer_falls_back_to_logging_when_unconfigured(monkeypatch
     assert "Would send to real_meta_sender_1: hello" in caplog.text
 
 
+def test_deliver_to_customer_stays_log_only_when_send_not_enabled(monkeypatch, caplog):
+    # Credentials configured, but META_SEND_ENABLED isn't on -- the
+    # whole point of the flag is that having the token around doesn't
+    # by itself risk a real send (e.g. testing the webhook end to end
+    # without messaging a real customer). See the "birthday charm"
+    # incident this was built to prevent a repeat of.
+    monkeypatch.setattr(web, "_META_ACCESS_TOKEN", "test-access-token")
+    monkeypatch.setattr(web, "_META_IG_USER_ID", "17841400000000000")
+    calls = []
+    monkeypatch.setattr(web.httpx, "post", lambda *a, **k: calls.append(1))
+    with caplog.at_level("INFO"):
+        web._deliver_to_customer("real_meta_sender_1", "hello")
+    assert calls == []
+    assert "Would send to real_meta_sender_1: hello" in caplog.text
+
+
 def test_deliver_to_customer_reports_but_does_not_raise_on_send_failure(monkeypatch):
     monkeypatch.setattr(web, "_META_ACCESS_TOKEN", "test-access-token")
     monkeypatch.setattr(web, "_META_IG_USER_ID", "17841400000000000")
+    monkeypatch.setattr(web, "_META_SEND_ENABLED", True)
 
     def _fake_post(*args, **kwargs):
         raise RuntimeError("Instagram API is down")

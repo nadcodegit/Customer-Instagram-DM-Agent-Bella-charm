@@ -32,7 +32,7 @@ os.environ["DASHBOARD_PASSWORD"] = "test"
 # tests that explicitly monkeypatch them), so a developer's local .env
 # having real values must not leak into the rest of the suite and silently
 # start making real HTTP calls to Instagram's API.
-for _meta_var in ("META_ACCESS_TOKEN", "META_IG_USER_ID", "META_VERIFY_TOKEN"):
+for _meta_var in ("META_ACCESS_TOKEN", "META_IG_USER_ID", "META_VERIFY_TOKEN", "META_SEND_ENABLED"):
     os.environ.pop(_meta_var, None)
 
 
