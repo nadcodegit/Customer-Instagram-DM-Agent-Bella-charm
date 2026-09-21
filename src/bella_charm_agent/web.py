@@ -127,6 +127,18 @@ def _deliver_to_customer(customer_id: str, text: str) -> None:
             timeout=10,
         )
         response.raise_for_status()
+        # The previous version of this function logged nothing at all
+        # on success -- meaning a real send that got a 200 back but
+        # still didn't actually deliver (e.g. the app's Development-
+        # mode messaging restrictions) looked identical in the logs to
+        # one that worked. Log the response body every time so a
+        # "sent but not delivered" case is at least visible, not silent.
+        logger.info(
+            "Instagram Send API accepted message to %s (status %s): %s",
+            customer_id,
+            response.status_code,
+            response.text,
+        )
     except Exception:
         # The graph/state already treat this reply as sent by this
         # point -- delivery failing here means the customer never

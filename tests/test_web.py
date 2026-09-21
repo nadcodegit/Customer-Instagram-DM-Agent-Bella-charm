@@ -302,13 +302,16 @@ def test_webhook_verification_handshake_rejects_when_no_verify_token_configured(
     assert response.status_code == 403
 
 
-def test_deliver_to_customer_calls_the_real_send_api_when_configured(monkeypatch):
+def test_deliver_to_customer_calls_the_real_send_api_when_configured(monkeypatch, caplog):
     monkeypatch.setattr(web, "_META_ACCESS_TOKEN", "test-access-token")
     monkeypatch.setattr(web, "_META_IG_USER_ID", "17841400000000000")
     monkeypatch.setattr(web, "_META_SEND_ENABLED", True)
     calls = []
 
     class _FakeResponse:
+        status_code = 200
+        text = '{"recipient_id": "real_meta_sender_1", "message_id": "mid.999"}'
+
         def raise_for_status(self):
             pass
 
@@ -317,7 +320,8 @@ def test_deliver_to_customer_calls_the_real_send_api_when_configured(monkeypatch
         return _FakeResponse()
 
     monkeypatch.setattr(web.httpx, "post", _fake_post)
-    web._deliver_to_customer("real_meta_sender_1", "Open daily, 9:00 - 18:00")
+    with caplog.at_level("INFO"):
+        web._deliver_to_customer("real_meta_sender_1", "Open daily, 9:00 - 18:00")
 
     assert len(calls) == 1
     assert calls[0]["url"] == "https://graph.instagram.com/v25.0/17841400000000000/messages"
@@ -326,6 +330,11 @@ def test_deliver_to_customer_calls_the_real_send_api_when_configured(monkeypatch
         "recipient": {"id": "real_meta_sender_1"},
         "message": {"text": "Open daily, 9:00 - 18:00"},
     }
+    # The bug this is a regression test for: a successful real send used
+    # to log nothing at all, making "accepted but not actually
+    # delivered" indistinguishable from "worked fine" in the logs.
+    assert "Instagram Send API accepted message to real_meta_sender_1" in caplog.text
+    assert "mid.999" in caplog.text
 
 
 def test_deliver_to_customer_falls_back_to_logging_when_unconfigured(monkeypatch, caplog):
