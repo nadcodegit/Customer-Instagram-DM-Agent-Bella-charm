@@ -133,17 +133,22 @@ def test_resolve_reject_via_http(client, monkeypatch, fake_llm):
 # ---------------------------------------------------------------------------
 
 
-def test_webhook_auto_sendable_message_delivers_immediately(client, monkeypatch, fake_llm):
+def test_webhook_auto_sendable_message_delivers_immediately(client, monkeypatch, fake_llm, caplog):
     monkeypatch.setattr(graph, "_llm", fake_llm(graph.NewRequestClassification(intent="store_hours")))
     delivered = []
     monkeypatch.setattr(web, "_deliver_to_customer", lambda customer_id, text: delivered.append((customer_id, text)))
 
-    response = client.post("/webhook", json={"customer_id": "webhook_test_1", "text": "are you open?"})
+    with caplog.at_level("INFO"):
+        response = client.post("/webhook", json={"customer_id": "webhook_test_1", "text": "are you open?"})
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "sent"
     assert "9:00" in body["draft_reply"]
     assert delivered == [("webhook_test_1", body["draft_reply"])]
+    # Every outcome (including pending_review, which never calls
+    # _deliver_to_customer at all) must be visible without needing
+    # dashboard access -- see test_webhook_pending_review_logs_its_outcome.
+    assert "Message from webhook_test_1 -> status=sent" in caplog.text
 
 
 def test_webhook_message_needing_review_does_not_deliver_yet(client, monkeypatch, fake_llm):
@@ -158,7 +163,7 @@ def test_webhook_message_needing_review_does_not_deliver_yet(client, monkeypatch
 
 
 def test_webhook_can_originate_a_fresh_pending_review_and_it_reaches_the_dashboard(
-    client, monkeypatch, fake_llm
+    client, monkeypatch, fake_llm, caplog
 ):
     monkeypatch.setattr(graph, "load_payment_details", lambda: "Sort Code: 000000")
     customer_id = "webhook_test_3"
@@ -188,10 +193,15 @@ def test_webhook_can_originate_a_fresh_pending_review_and_it_reaches_the_dashboa
     delivered = []
     monkeypatch.setattr(web, "_deliver_to_customer", lambda cid, text: delivered.append((cid, text)))
 
-    response = client.post("/webhook", json={"customer_id": customer_id, "text": "yes"})
+    with caplog.at_level("INFO"):
+        response = client.post("/webhook", json={"customer_id": customer_id, "text": "yes"})
     assert response.status_code == 200
     assert response.json()["status"] == "pending_review"
     assert delivered == []  # not delivered -- still waiting on the owner
+    # pending_review never calls _deliver_to_customer at all -- without
+    # this outcome log, that's indistinguishable from something having
+    # gone wrong silently when checking logs without dashboard access.
+    assert f"Message from {customer_id} -> status=pending_review" in caplog.text
 
     dashboard_html = client.get("/").text
     assert "Sort Code: 000000" in dashboard_html

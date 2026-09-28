@@ -234,6 +234,14 @@ def webhook(payload: dict) -> dict:
             status_code=500,
             detail="Something went wrong processing this message.",
         )
+    # Every other branch above logs something (parse failure, processing
+    # failure, delivery success/failure) -- this one didn't, so a
+    # message that landed in pending_review (needs the owner's review,
+    # no delivery attempt at all -- expected and correct) looked
+    # identical in the logs to one where something odd happened with no
+    # obvious explanation. Always log the outcome so status is visible
+    # without needing dashboard access.
+    logger.info("Message from %s -> status=%s", customer_id, result["status"])
     if result["status"] == "sent":
         _deliver_to_customer(customer_id, result["draft_reply"])
     return result
